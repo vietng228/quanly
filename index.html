@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<title>Quản Lý Thu Chi &amp; Bán Hàng</title>
+<meta name="theme-color" content="#2563eb" />
+<meta name="description" content="App quản lý thu chi, nhập hàng, bán hàng offline cho cửa hàng nhỏ" />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/icon-apple.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Thu Chi Shop" />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <h1 id="topbar-title">Tổng quan</h1>
+</header>
+
+<main id="app"></main>
+
+<nav class="bottomnav" id="bottomnav">
+  <button class="nav-btn" data-tab="dashboard">
+    <span class="nav-icon">📊</span><span>Tổng quan</span>
+  </button>
+  <button class="nav-btn" data-tab="sales">
+    <span class="nav-icon">💵</span><span>Bán hàng</span>
+  </button>
+  <button class="nav-btn" data-tab="purchases">
+    <span class="nav-icon">📥</span><span>Nhập hàng</span>
+  </button>
+  <button class="nav-btn" data-tab="customers">
+    <span class="nav-icon">👥</span><span>Khách hàng</span>
+  </button>
+  <button class="nav-btn" data-tab="more">
+    <span class="nav-icon">☰</span><span>Thêm</span>
+  </button>
+</nav>
+
+<!-- Bottom sheet form dùng chung -->
+<div class="sheet-overlay" id="sheet-overlay">
+  <div class="sheet" id="sheet">
+    <div class="sheet-handle"></div>
+    <div id="sheet-content"></div>
+  </div>
+</div>
+
+<!-- Modal chọn mặt hàng -->
+<div class="modal-overlay" id="picker-modal">
+  <div class="modal-full">
+    <div class="modal-header">
+      <button class="icon-btn" id="picker-close">✕</button>
+      <input type="text" id="picker-search" placeholder="Tìm mặt hàng..." />
+      <button class="icon-btn" id="picker-scan">📷</button>
+    </div>
+    <div id="picker-list" class="picker-list"></div>
+  </div>
+</div>
+
+<!-- Modal chọn khách hàng -->
+<div class="modal-overlay" id="customer-picker-modal">
+  <div class="modal-full">
+    <div class="modal-header">
+      <button class="icon-btn" id="cust-picker-close">✕</button>
+      <input type="text" id="cust-picker-search" placeholder="Tìm khách hàng..." />
+      <div style="width:40px"></div>
+    </div>
+    <div id="cust-picker-list" class="picker-list"></div>
+  </div>
+</div>
+
+<!-- Modal quét mã vạch -->
+<div class="modal-overlay" id="scanner-modal">
+  <div class="modal-full">
+    <div class="modal-header">
+      <button class="icon-btn" id="scanner-close">✕</button>
+      <div class="modal-title">Quét mã vạch / QR</div>
+      <div style="width:40px"></div>
+    </div>
+    <div id="scanner-reader"></div>
+    <div id="scanner-error" class="scanner-error"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="vendor/html5-qrcode.min.js"></script>
+<script src="js/utils.js"></script>
+<script src="js/db.js"></script>
+<script src="js/scanner.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
