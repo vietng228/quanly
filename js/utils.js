@@ -66,6 +66,17 @@ function getPeriodRange(period) {
   return { start: '0000-01-01', end: '9999-12-31', label: 'Tất cả' };
 }
 
+// Bỏ dấu tiếng Việt — dùng cho nội dung mã QR chuyển khoản (chuẩn VietQR/NAPAS
+// yêu cầu text thuần ASCII, nhiều app ngân hàng hiển thị sai nếu còn dấu).
+function removeVietnameseTones(str) {
+  if (!str) return '';
+  return String(str)
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D');
+}
+
 function escapeHtml(str) {
   if (str === undefined || str === null) return '';
   return String(str)

@@ -25,6 +25,101 @@ function categoryIcon(cat) {
   return CATEGORY_ICONS[cat] || CATEGORY_ICONS['Khác'];
 }
 
+// Danh sách ngân hàng & mã BIN theo chuẩn VietQR/NAPAS 247 (nguồn: api.vietqr.io)
+// — dùng để tự tạo mã QR chuyển khoản ngay trên máy, không cần gọi API ngoài.
+const VIETQR_BANKS = [
+  { code: 'ABBANK', name: 'An Bình (ABBANK)', bin: '970425' },
+  { code: 'ACB', name: 'Á Châu (ACB)', bin: '970416' },
+  { code: 'Agribank', name: 'Agribank', bin: '970405' },
+  { code: 'BacABank', name: 'Bắc Á (BacABank)', bin: '970409' },
+  { code: 'BaoVietBank', name: 'Bảo Việt (BaoVietBank)', bin: '970438' },
+  { code: 'BIDV', name: 'BIDV', bin: '970418' },
+  { code: 'CBBank', name: 'Xây dựng Việt Nam (CBBank)', bin: '970444' },
+  { code: 'Eximbank', name: 'Eximbank', bin: '970431' },
+  { code: 'GPBank', name: 'Dầu Khí Toàn Cầu (GPBank)', bin: '970408' },
+  { code: 'HDBank', name: 'HDBank', bin: '970437' },
+  { code: 'HongLeong', name: 'Hong Leong Việt Nam', bin: '970442' },
+  { code: 'IndovinaBank', name: 'Indovina Bank', bin: '970434' },
+  { code: 'KienLongBank', name: 'Kiên Long (KienLongBank)', bin: '970452' },
+  { code: 'LPBank', name: 'Lộc Phát (LPBank)', bin: '970449' },
+  { code: 'MBBank', name: 'Quân đội (MBBank)', bin: '970422' },
+  { code: 'MBV', name: 'Việt Nam Hiện Đại (MBV)', bin: '970414' },
+  { code: 'MSB', name: 'Hàng Hải (MSB)', bin: '970426' },
+  { code: 'NamABank', name: 'Nam Á (NamABank)', bin: '970428' },
+  { code: 'NCB', name: 'Quốc Dân (NCB)', bin: '970419' },
+  { code: 'OCB', name: 'Phương Đông (OCB)', bin: '970448' },
+  { code: 'PGBank', name: 'PGBank', bin: '970430' },
+  { code: 'PVcomBank', name: 'Đại Chúng Việt Nam (PVcomBank)', bin: '970412' },
+  { code: 'PublicBank', name: 'Public Việt Nam', bin: '970439' },
+  { code: 'SaigonBank', name: 'Sài Gòn Công Thương (SaigonBank)', bin: '970400' },
+  { code: 'Sacombank', name: 'Sacombank', bin: '970403' },
+  { code: 'SCB', name: 'Sài Gòn (SCB)', bin: '970429' },
+  { code: 'SeABank', name: 'Đông Nam Á (SeABank)', bin: '970440' },
+  { code: 'SHB', name: 'SHB', bin: '970443' },
+  { code: 'ShinhanBank', name: 'Shinhan Việt Nam', bin: '970424' },
+  { code: 'Techcombank', name: 'Techcombank', bin: '970407' },
+  { code: 'TPBank', name: 'TPBank', bin: '970423' },
+  { code: 'VietABank', name: 'Việt Á (VietABank)', bin: '970427' },
+  { code: 'VietBank', name: 'Việt Nam Thương Tín (VietBank)', bin: '970433' },
+  { code: 'VietCapitalBank', name: 'Bản Việt (VietCapitalBank)', bin: '970454' },
+  { code: 'Vietcombank', name: 'Vietcombank', bin: '970436' },
+  { code: 'VietinBank', name: 'VietinBank', bin: '970415' },
+  { code: 'Vikki', name: 'Số Vikki (Vikki Bank)', bin: '970406' },
+  { code: 'VIB', name: 'Quốc tế (VIB)', bin: '970441' },
+  { code: 'VPBank', name: 'VPBank', bin: '970432' },
+];
+
+// CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF) — thuật toán checksum bắt buộc
+// theo chuẩn EMVCo QR mà VietQR/NAPAS sử dụng.
+function crc16CcittFalse(str) {
+  let crc = 0xffff;
+  for (let i = 0; i < str.length; i++) {
+    crc ^= (str.charCodeAt(i) & 0xff) << 8;
+    for (let j = 0; j < 8; j++) {
+      crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+    }
+  }
+  return crc.toString(16).toUpperCase().padStart(4, '0');
+}
+
+function vietQrTlv(tag, value) {
+  const len = String(value).length.toString().padStart(2, '0');
+  return `${tag}${len}${value}`;
+}
+
+// Tự dựng chuỗi mã VietQR (chuẩn NAPAS 247/EMVCo) hoàn toàn ở phía client —
+// không gọi API/mạng ngoài nên vẫn hoạt động khi máy mất mạng. Nếu có amount,
+// mã QR sẽ tự điền sẵn đúng số tiền hoá đơn khi khách quét bằng app ngân hàng.
+function buildVietQrPayload({ bin, accountNo, accountName, amount, purpose }) {
+  const accountInfo = vietQrTlv('00', bin) + vietQrTlv('01', accountNo);
+  const beneficiary = vietQrTlv('00', 'A000000727') + vietQrTlv('01', accountInfo) + vietQrTlv('02', 'QRIBFTTA');
+  let payload =
+    vietQrTlv('00', '01') + vietQrTlv('01', amount ? '12' : '11') + vietQrTlv('38', beneficiary) + vietQrTlv('53', '704');
+  if (amount) payload += vietQrTlv('54', String(Math.round(amount)));
+  payload += vietQrTlv('58', 'VN');
+  if (accountName) payload += vietQrTlv('59', removeVietnameseTones(accountName).toUpperCase().slice(0, 25));
+  if (purpose) {
+    const purposeAscii = removeVietnameseTones(purpose).slice(0, 25);
+    payload += vietQrTlv('62', vietQrTlv('08', purposeAscii));
+  }
+  payload += '6304';
+  return payload + crc16CcittFalse(payload);
+}
+
+// Vẽ mã QR (thư viện vendor/qrcode.js) từ 1 chuỗi bất kỳ, trả về data URL ảnh
+// để nhúng trực tiếp vào <img src="...">, dùng được cả trong cửa sổ in hoá đơn.
+function qrPayloadToDataUrl(payload, cellSize) {
+  try {
+    const qr = qrcode(0, 'M');
+    qr.addData(payload);
+    qr.make();
+    return qr.createDataURL(cellSize || 5, cellSize ? cellSize : 5);
+  } catch (e) {
+    console.warn('Tạo mã QR lỗi:', e);
+    return null;
+  }
+}
+
 const state = {
   tab: 'dashboard',
   period: 'day',
@@ -235,6 +330,10 @@ function onAppClick(e) {
         address: document.getElementById('f-shop-address').value.trim(),
         warranty: document.getElementById('f-shop-warranty').value.trim(),
         bankInfo: document.getElementById('f-shop-bank-info').value.trim(),
+        bankCode: document.getElementById('f-shop-bank-code').value,
+        bankAccountNo: document.getElementById('f-shop-bank-account').value.trim(),
+        bankAccountName: document.getElementById('f-shop-bank-holder').value.trim(),
+        qrDynamicAmount: document.getElementById('f-shop-qr-dynamic').checked,
       });
       toast('Đã lưu thông tin cửa hàng');
     },
@@ -1269,11 +1368,39 @@ function submitSaleForm() {
   if (isNewSale) printInvoice(saved);
 }
 
+// Xác định ảnh QR chuyển khoản sẽ in trên hoá đơn: ưu tiên tự tạo theo
+// ngân hàng/STK đã lưu (điền sẵn đúng số tiền hoá đơn nếu bật tuỳ chọn đó),
+// nếu chưa cấu hình thì dùng ảnh QR tĩnh đã tải lên (nếu có).
+function resolveInvoiceQr(shop, sale, total) {
+  const bank = VIETQR_BANKS.find((b) => b.code === shop.bankCode);
+  if (bank && shop.bankAccountNo) {
+    const useAmount = shop.qrDynamicAmount !== false;
+    const idSuffix = sale.id ? String(sale.id).slice(-6) : '';
+    const payload = buildVietQrPayload({
+      bin: bank.bin,
+      accountNo: shop.bankAccountNo,
+      accountName: shop.bankAccountName || shop.name,
+      amount: useAmount ? total : null,
+      purpose: `Thanh toan HD ${idSuffix}`.trim(),
+    });
+    const dataUrl = qrPayloadToDataUrl(payload, 5);
+    if (dataUrl) {
+      const caption = shop.bankInfo || `${bank.name} - ${shop.bankAccountNo}${shop.bankAccountName ? ' - ' + shop.bankAccountName : ''}`;
+      return { dataUrl, caption };
+    }
+  }
+  if (shop.bankQr) {
+    return { dataUrl: shop.bankQr, caption: shop.bankInfo || '' };
+  }
+  return null;
+}
+
 function printInvoice(sale) {
   if (!sale) { toast('Không tìm thấy đơn bán để in', true); return; }
   const item = DB.getItem(sale.itemId);
   const shop = DB.getShopInfo();
   const total = sale.sellPrice * sale.quantity;
+  const invoiceQr = resolveInvoiceQr(shop, sale, total);
   const win = window.open('', '_blank', 'width=380,height=600');
   if (!win) {
     toast('Trình duyệt đang chặn cửa sổ in. Hãy cho phép popup rồi bấm in lại.', true);
@@ -1333,11 +1460,11 @@ function printInvoice(sale) {
       : ''
   }
   ${
-    shop.bankQr
+    invoiceQr
       ? `<hr /><div class="center qr-box">
-          <div style="font-size:12.5px;margin-bottom:4px">Quét mã để chuyển khoản</div>
-          <img src="${shop.bankQr}" style="width:140px;height:140px;object-fit:contain" />
-          ${shop.bankInfo ? `<div style="font-size:12px;margin-top:4px">${escapeHtml(shop.bankInfo)}</div>` : ''}
+          <div style="font-size:12.5px;margin-bottom:4px">Quét mã để chuyển khoản${shop.qrDynamicAmount !== false && VIETQR_BANKS.find((b) => b.code === shop.bankCode) && shop.bankAccountNo ? ` (đã điền sẵn ${formatMoney(total)})` : ''}</div>
+          <img src="${invoiceQr.dataUrl}" style="width:140px;height:140px;object-fit:contain" />
+          ${invoiceQr.caption ? `<div style="font-size:12px;margin-top:4px">${escapeHtml(invoiceQr.caption)}</div>` : ''}
         </div>`
       : ''
   }
@@ -1683,6 +1810,26 @@ function shopQrBlockHtml(shop) {
   `;
 }
 
+// Vẽ lại QR xem trước ngay trong màn Cài đặt mỗi khi đổi ngân hàng/STK/tên —
+// QR xem trước không có sẵn số tiền (số tiền chỉ tự điền lúc in hoá đơn thật).
+function updateShopQrAutoPreview() {
+  const previewEl = document.getElementById('shop-qr-auto-preview');
+  if (!previewEl) return;
+  const bankCode = document.getElementById('f-shop-bank-code')?.value;
+  const accountNo = document.getElementById('f-shop-bank-account')?.value.trim();
+  const accountName = document.getElementById('f-shop-bank-holder')?.value.trim();
+  const bank = VIETQR_BANKS.find((b) => b.code === bankCode);
+  if (!bank || !accountNo) {
+    previewEl.innerHTML = '';
+    return;
+  }
+  const payload = buildVietQrPayload({ bin: bank.bin, accountNo, accountName, purpose: 'Xem truoc' });
+  const dataUrl = qrPayloadToDataUrl(payload, 4);
+  previewEl.innerHTML = dataUrl
+    ? `<img src="${dataUrl}" alt="Xem trước mã QR" style="width:120px;height:120px;border:1px solid var(--border);border-radius:8px;background:#fff" /><div class="help-text">Xem trước — số tiền sẽ tự điền khi in hoá đơn thật</div>`
+    : `<div class="help-text">Không tạo được mã xem trước, kiểm tra lại số tài khoản.</div>`;
+}
+
 function renderSettings(app) {
   const counts = {
     items: DB.getItems().length,
@@ -1722,11 +1869,35 @@ function renderSettings(app) {
         <textarea id="f-shop-warranty" rows="3" placeholder="VD: Bảo hành 12 tháng lỗi phần cứng NSX. Không áp dụng với cháy nổ, vào nước, rơi vỡ, tự ý sửa chữa...">${escapeHtml(shop.warranty || '')}</textarea>
       </div>
       <div class="form-group">
+        <label>🏦 Tự tạo mã QR chuyển khoản theo số tài khoản</label>
+        <p class="help-text" style="margin-bottom:8px">Chọn ngân hàng + nhập số tài khoản, app tự vẽ mã QR chuẩn VietQR ngay trên máy (không cần mạng). Khi in hoá đơn, mã QR tự điền sẵn đúng số tiền của đơn đó.</p>
+        <div class="form-group">
+          <label>Ngân hàng</label>
+          <select id="f-shop-bank-code">
+            <option value="">-- Chọn ngân hàng --</option>
+            ${VIETQR_BANKS.map((b) => `<option value="${b.code}" ${shop.bankCode === b.code ? 'selected' : ''}>${escapeHtml(b.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Số tài khoản</label>
+          <input type="text" inputmode="numeric" id="f-shop-bank-account" value="${escapeHtml(shop.bankAccountNo || '')}" placeholder="VD: 0123456789" />
+        </div>
+        <div class="form-group">
+          <label>Tên chủ tài khoản (không dấu)</label>
+          <input type="text" id="f-shop-bank-holder" value="${escapeHtml(shop.bankAccountName || '')}" placeholder="VD: NGUYEN VAN A" />
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-weight:400;font-size:13.5px;margin-bottom:10px">
+          <input type="checkbox" id="f-shop-qr-dynamic" ${shop.qrDynamicAmount === false ? '' : 'checked'} style="width:auto" />
+          Tự điền đúng số tiền hoá đơn vào mã QR khi in
+        </label>
+        <div id="shop-qr-auto-preview"></div>
+      </div>
+      <div class="form-group">
         <label>Thông tin chuyển khoản (hiện dưới mã QR)</label>
         <input type="text" id="f-shop-bank-info" value="${escapeHtml(shop.bankInfo || '')}" placeholder="VD: MB Bank - 0123456789 - NGUYEN VAN A" />
       </div>
       <div class="form-group">
-        <label>Mã QR chuyển khoản (in ở cuối hoá đơn)</label>
+        <label>Hoặc dùng ảnh QR có sẵn (nếu ngân hàng không có trong danh sách trên)</label>
         <div id="shop-qr-block">${shopQrBlockHtml(shop)}</div>
         <input type="file" id="f-shop-qr-file" accept="image/*" style="display:none" />
       </div>
@@ -1790,6 +1961,11 @@ function renderSettings(app) {
     } catch (err) {
       toast('Không đọc được ảnh, thử lại nhé', true);
     }
+  });
+  updateShopQrAutoPreview();
+  ['f-shop-bank-code', 'f-shop-bank-account', 'f-shop-bank-holder'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', updateShopQrAutoPreview);
   });
   IMPORT_TYPES.forEach((type) => {
     document.getElementById(`f-import-${type}`).addEventListener('change', (e) => {
@@ -2389,7 +2565,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=11').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=12').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
