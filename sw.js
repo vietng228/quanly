@@ -1,5 +1,5 @@
 /* sw.js — service worker: cache toàn bộ app để chạy offline hoàn toàn */
-const CACHE_NAME = 'thuchi-shop-v23'; // Bump số này ở MỌI lần phát hành để buộc
+const CACHE_NAME = 'thuchi-shop-v24'; // Bump số này ở MỌI lần phát hành để buộc
 // trình duyệt xoá cache cũ và lấy bản mới — nếu quên bump, người dùng đã từng
 // mở app có thể bị kẹt ở bản cũ vĩnh viễn dù đã cập nhật code lên GitHub.
 const ASSETS = [
