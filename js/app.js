@@ -132,6 +132,14 @@ const state = {
   inventorySearch: '',
   lookupQuery: '',
   dashShowAllItems: false,
+  purchasePeriod: 'all',
+  purchaseCustomStart: todayStr(),
+  purchaseCustomEnd: todayStr(),
+  purchaseSearch: '',
+  salePeriod: 'all',
+  saleCustomStart: todayStr(),
+  saleCustomEnd: todayStr(),
+  saleSearch: '',
 };
 
 const TITLES = {
@@ -284,6 +292,9 @@ function onAppClick(e) {
     'go-tab': () => setTab(t.dataset.tab),
     'set-period': () => { state.period = t.dataset.period; render(); },
     'toggle-dash-items': () => { state.dashShowAllItems = !state.dashShowAllItems; render(); },
+    'view-in-stock-items': openInStockItemsSheet,
+    'set-purchase-period': () => { state.purchasePeriod = t.dataset.period; render(); },
+    'set-sale-period': () => { state.salePeriod = t.dataset.period; render(); },
     'add-item': () => openItemForm(null),
     'edit-item': () => openItemForm(DB.getItem(id)),
     'delete-item': () => {
@@ -485,6 +496,7 @@ function onSheetClick(e) {
     'edit-item': () => openItemForm(DB.getItem(t.dataset.id)),
     'edit-purchase': () => openPurchaseForm(DB.getPurchases().find((p) => p.id === t.dataset.id)),
     'edit-sale': () => openSaleForm(DB.getSales().find((s) => s.id === t.dataset.id)),
+    'view-item-detail': () => { closeSheet(); openItemStockSheetById(t.dataset.id); },
     'delete-item': () => {
       if (confirmDialog('Xoá mặt hàng này? (Các lần nhập/bán liên quan vẫn giữ nguyên lịch sử)')) {
         DB.deleteItem(t.dataset.id);
@@ -846,6 +858,7 @@ function renderItems(app) {
             <div class="li-main">
               <div class="li-title">${escapeHtml(first.name)} ${merged ? `<span class="badge nhap">🔗 Gộp ${groupItems.length}</span>` : ''}</div>
               <div class="li-sub">Nhập ${formatMoney(first.defaultCostPrice)} · Bán ${formatMoney(first.defaultSellPrice)}${first.barcode && !merged ? ' · #' + escapeHtml(first.barcode) : ''}</div>
+              ${!merged && (first.productCode || first.model) ? `<div class="li-sub">${first.productCode ? '🏷️ Mã SP: ' + escapeHtml(first.productCode) : ''}${first.productCode && first.model ? ' · ' : ''}${first.model ? '📱 Model: ' + escapeHtml(first.model) : ''}</div>` : ''}
               <div class="li-sub">Đã nhập ${purchased} · Đã bán ${sold} · Tồn ${stock} ${stockBadge}</div>
             </div>
             ${
@@ -1049,6 +1062,11 @@ function openItemStockSheet(name) {
 
   openSheet(`
     <div class="sheet-title">📦 ${escapeHtml(first.name)}</div>
+    ${
+      first.productCode || first.model
+        ? `<p class="help-text" style="margin-top:-8px">${first.productCode ? '🏷️ Mã SP: ' + escapeHtml(first.productCode) : ''}${first.productCode && first.model ? ' · ' : ''}${first.model ? '📱 Model: ' + escapeHtml(first.model) : ''}</p>`
+        : ''
+    }
     <div class="stat-grid">
       <div class="stat-card">
         <div class="label">Đã nhập</div>
@@ -1135,6 +1153,42 @@ function computeInventory() {
   });
 }
 
+// Bấm vào thẻ "Giá trị hàng đang tồn" ở Tồn kho -> hiện luôn danh sách các
+// mặt hàng đang còn tồn kho (liên kết mọi nơi để dễ kiểm soát), mỗi dòng bấm
+// vào lại mở chi tiết mặt hàng đó.
+function openInStockItemsSheet() {
+  const inv = computeInventory()
+    .filter((x) => x.stock > 0)
+    .sort((a, b) => b.stockValue - a.stockValue);
+  const total = inv.reduce((s, x) => s + x.stockValue, 0);
+  const rowsHtml =
+    inv.length === 0
+      ? '<div class="empty-state">Không có mặt hàng nào đang tồn kho.</div>'
+      : inv
+          .map(
+            (x) => `
+      <div class="list-item" data-action="view-item-detail" data-id="${x.item.id}">
+        <div class="item-icon">${categoryIcon(x.item.category)}</div>
+        <div class="li-main">
+          <div class="li-title">${escapeHtml(x.item.name)}</div>
+          <div class="li-sub">Tồn ${x.stock} ${escapeHtml(x.item.unit || '')} · Trị giá ${formatMoney(x.stockValue)}</div>
+        </div>
+      </div>`
+          )
+          .join('');
+  openSheet(`
+    <div class="sheet-title">📦 Mặt hàng đang tồn kho (${inv.length})</div>
+    <div class="stat-grid" style="margin-bottom:10px">
+      <div class="stat-card wide">
+        <div class="label">Tổng giá trị đang tồn</div>
+        <div class="value">${formatMoney(total)}</div>
+      </div>
+    </div>
+    ${rowsHtml}
+    <div class="btn-row"><button data-action="close-sheet">Đóng</button></div>
+  `);
+}
+
 // Giá nhập gần nhất THỰC SỰ của 1 mặt hàng — tính trực tiếp từ lịch sử nhập
 // hàng theo NGÀY nhập (bản ghi có ngày mới nhất, không phải bản ghi được
 // lưu/sửa gần đây nhất), để khi bán hàng luôn lấy đúng giá của lô nhập mới
@@ -1165,8 +1219,8 @@ function renderInventory(app) {
     ${backToMoreLink()}
     <input type="text" class="searchbox" id="inventory-search" placeholder="🔍 Tìm mặt hàng tồn kho..." value="${escapeHtml(state.inventorySearch || '')}" />
     <div class="stat-grid" style="margin-bottom:14px">
-      <div class="stat-card wide">
-        <div class="label">💰 Giá trị hàng đang tồn (theo giá nhập)</div>
+      <div class="stat-card wide" data-action="view-in-stock-items" style="cursor:pointer">
+        <div class="label">💰 Giá trị hàng đang tồn (theo giá nhập) · bấm để xem chi tiết</div>
         <div class="value">${formatMoney(totalStockValue)}</div>
       </div>
       <div class="stat-card">
@@ -1372,6 +1426,16 @@ function openItemForm(item) {
     </div>
     <div class="form-row">
       <div class="form-group">
+        <label>Mã sản phẩm (tuỳ chọn)</label>
+        <input type="text" id="f-item-code" value="${escapeHtml(item?.productCode || '')}" placeholder="VD: SP001" />
+      </div>
+      <div class="form-group">
+        <label>Model (tuỳ chọn)</label>
+        <input type="text" id="f-item-model" value="${escapeHtml(item?.model || '')}" placeholder="VD: L13-ABC" />
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
         <label>Giá nhập mặc định</label>
         <input type="number" id="f-item-cost" value="${item?.defaultCostPrice ?? ''}" placeholder="0" min="0" />
       </div>
@@ -1411,6 +1475,8 @@ function submitItemForm() {
     name,
     category,
     barcode: document.getElementById('f-item-barcode').value.trim(),
+    productCode: document.getElementById('f-item-code').value.trim(),
+    model: document.getElementById('f-item-model').value.trim(),
     defaultCostPrice: parseMoneyInput(document.getElementById('f-item-cost').value),
     defaultSellPrice: parseMoneyInput(document.getElementById('f-item-sell').value),
     unit: document.getElementById('f-item-unit').value.trim() || 'cái',
@@ -1433,6 +1499,62 @@ function submitItemForm() {
 // Gộp 1 danh sách bản ghi (đã có trường .date dạng yyyy-mm-dd, sắp xếp mới
 // nhất trước) thành các nhóm theo ngày, giữ nguyên thứ tự — dùng chung cho
 // danh sách Nhập hàng & Bán hàng để dễ nhìn hơn thay vì hiện phẳng hết.
+// Bộ lọc theo khoảng thời gian (ngày/tuần/tháng/tất cả/tuỳ chỉnh) dùng chung
+// cho các màn Nhập hàng / Bán hàng — giúp tra cứu theo mốc thời gian dễ hơn,
+// tương tự cách lọc ở Tổng quan.
+function getStateDateRange(prefix) {
+  const period = state[prefix + 'Period'];
+  if (period === 'custom') {
+    let start = state[prefix + 'CustomStart'] || todayStr();
+    let end = state[prefix + 'CustomEnd'] || todayStr();
+    if (start > end) { const tmp = start; start = end; end = tmp; }
+    return { start, end };
+  }
+  return getPeriodRange(period);
+}
+function filterRowsByPeriodState(rows, prefix) {
+  const { start, end } = getStateDateRange(prefix);
+  return rows.filter((r) => isInRange(r.date, start, end));
+}
+function periodTabsHtml(prefix, actionName) {
+  const cur = state[prefix + 'Period'];
+  const btn = (p, label) =>
+    `<button class="${cur === p ? 'active' : ''}" data-action="${actionName}" data-period="${p}">${label}</button>`;
+  return `<div class="period-tabs">
+    ${btn('day', 'Hôm nay')}
+    ${btn('week', 'Tuần này')}
+    ${btn('month', 'Tháng này')}
+    ${btn('all', 'Tất cả')}
+    ${btn('custom', '📅 Tuỳ chỉnh')}
+  </div>`;
+}
+function customRangeHtml(prefix) {
+  return `<div class="form-row" style="margin-bottom:14px">
+    <div class="form-group">
+      <label>Từ ngày</label>
+      <input type="date" id="f-${prefix}-custom-start" value="${state[prefix + 'CustomStart']}" />
+    </div>
+    <div class="form-group">
+      <label>Đến ngày</label>
+      <input type="date" id="f-${prefix}-custom-end" value="${state[prefix + 'CustomEnd']}" />
+    </div>
+  </div>`;
+}
+function wireCustomRangeInputs(prefix) {
+  const startEl = document.getElementById(`f-${prefix}-custom-start`);
+  const endEl = document.getElementById(`f-${prefix}-custom-end`);
+  if (startEl)
+    startEl.addEventListener('change', () => {
+      state[prefix + 'CustomStart'] = startEl.value || state[prefix + 'CustomStart'];
+      render();
+    });
+  if (endEl)
+    endEl.addEventListener('change', () => {
+      state[prefix + 'CustomEnd'] = endEl.value || state[prefix + 'CustomEnd'];
+      render();
+    });
+}
+
 function groupRowsByDate(rows) {
   const groups = [];
   rows.forEach((r) => {
@@ -1453,43 +1575,76 @@ function dateGroupHeaderHtml(date, rows, sumFn) {
 }
 
 function renderPurchases(app) {
-  const rows = DB.getPurchases();
+  const periodRows = filterRowsByPeriodState(DB.getPurchases(), 'purchase');
+
   app.innerHTML = `
+    ${periodTabsHtml('purchase', 'set-purchase-period')}
+    ${state.purchasePeriod === 'custom' ? customRangeHtml('purchase') : ''}
+    <input type="text" class="searchbox" id="purchase-search" placeholder="🔍 Tìm theo tên mặt hàng, ghi chú, IMEI..." value="${escapeHtml(state.purchaseSearch || '')}" />
+    <div id="purchase-summary"></div>
     <div id="stock-list"></div>
     <button class="fab" data-action="add-purchase">+</button>
   `;
-  const listEl = document.getElementById('stock-list');
-  if (rows.length === 0) {
-    listEl.innerHTML = `<div class="empty-state">Chưa có lần nhập hàng nào.<br/>Bấm nút + để nhập hàng.</div>`;
-    return;
-  }
-  listEl.innerHTML = groupRowsByDate(rows)
-    .map(({ date, rows: dayRows }) => {
-      const header = dateGroupHeaderHtml(date, dayRows, (p) => p.costPrice * p.quantity);
-      const items = dayRows
-        .map((p) => {
-          const item = DB.getItem(p.itemId);
-          return `
-        <div class="list-item">
-          <div class="item-icon" ${item ? `data-action="view-item-detail" data-id="${item.id}"` : ''}>${categoryIcon(item?.category)}</div>
-          <div class="li-main" ${item ? `data-action="view-item-detail" data-id="${item.id}"` : ''}>
-            <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')} <span class="badge nhap">Nhập</span></div>
-            <div class="li-sub">SL ${p.quantity} × ${formatMoney(p.costPrice)}${p.note ? ' · ' + escapeHtml(p.note) : ''}</div>
-            ${p.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(p.imei)}</div>` : ''}
-          </div>
-          <div class="li-right">
-            <div class="li-amount">${formatMoney(p.costPrice * p.quantity)}</div>
-            <div class="li-actions">
-              <button class="icon-btn" data-action="edit-purchase" data-id="${p.id}">✏️</button>
-              <button class="icon-btn" data-action="delete-purchase" data-id="${p.id}">🗑️</button>
+
+  function updateList() {
+    const q = (state.purchaseSearch || '').toLowerCase();
+    const rows = periodRows.filter((p) => {
+      if (!q) return true;
+      const item = DB.getItem(p.itemId);
+      return (
+        (item?.name || '').toLowerCase().includes(q) ||
+        (p.note || '').toLowerCase().includes(q) ||
+        (p.imei || '').toLowerCase().includes(q)
+      );
+    });
+    const summaryEl = document.getElementById('purchase-summary');
+    const totalSpend = rows.reduce((s, p) => s + p.costPrice * p.quantity, 0);
+    summaryEl.innerHTML = `<div class="stat-grid" style="margin-bottom:10px">
+      <div class="stat-card"><div class="label">Số lần nhập</div><div class="value">${rows.length}</div></div>
+      <div class="stat-card"><div class="label">Tổng tiền nhập</div><div class="value neg">${formatMoney(totalSpend)}</div></div>
+    </div>`;
+
+    const listEl = document.getElementById('stock-list');
+    if (rows.length === 0) {
+      listEl.innerHTML = `<div class="empty-state">Không có lần nhập hàng nào phù hợp.<br/>Bấm nút + để nhập hàng.</div>`;
+      return;
+    }
+    listEl.innerHTML = groupRowsByDate(rows)
+      .map(({ date, rows: dayRows }) => {
+        const header = dateGroupHeaderHtml(date, dayRows, (p) => p.costPrice * p.quantity);
+        const items = dayRows
+          .map((p) => {
+            const item = DB.getItem(p.itemId);
+            return `
+          <div class="list-item">
+            <div class="item-icon" ${item ? `data-action="view-item-detail" data-id="${item.id}"` : ''}>${categoryIcon(item?.category)}</div>
+            <div class="li-main" ${item ? `data-action="view-item-detail" data-id="${item.id}"` : ''}>
+              <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')} <span class="badge nhap">Nhập</span></div>
+              <div class="li-sub">SL ${p.quantity} × ${formatMoney(p.costPrice)}${p.note ? ' · ' + escapeHtml(p.note) : ''}</div>
+              ${p.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(p.imei)}</div>` : ''}
             </div>
-          </div>
-        </div>`;
-        })
-        .join('');
-      return header + items;
-    })
-    .join('');
+            <div class="li-right">
+              <div class="li-amount">${formatMoney(p.costPrice * p.quantity)}</div>
+              <div class="li-actions">
+                <button class="icon-btn" data-action="edit-purchase" data-id="${p.id}">✏️</button>
+                <button class="icon-btn" data-action="delete-purchase" data-id="${p.id}">🗑️</button>
+              </div>
+            </div>
+          </div>`;
+          })
+          .join('');
+        return header + items;
+      })
+      .join('');
+  }
+
+  updateList();
+  const searchEl = document.getElementById('purchase-search');
+  searchEl.addEventListener('input', () => {
+    state.purchaseSearch = searchEl.value;
+    updateList();
+  });
+  if (state.purchasePeriod === 'custom') wireCustomRangeInputs('purchase');
 }
 
 function itemPickBoxHtml(item) {
@@ -1754,45 +1909,79 @@ function submitPurchaseForm() {
 // SALES (Bán hàng)
 // ---------------------------------------------------------------------
 function renderSales(app) {
-  const rows = DB.getSales();
+  const periodRows = filterRowsByPeriodState(DB.getSales(), 'sale');
+
   app.innerHTML = `
+    ${periodTabsHtml('sale', 'set-sale-period')}
+    ${state.salePeriod === 'custom' ? customRangeHtml('sale') : ''}
+    <input type="text" class="searchbox" id="sale-search" placeholder="🔍 Tìm theo tên mặt hàng, khách hàng, IMEI..." value="${escapeHtml(state.saleSearch || '')}" />
+    <div id="sale-summary"></div>
     <div id="stock-list"></div>
     <button class="fab" data-action="add-sale">+</button>
   `;
-  const listEl = document.getElementById('stock-list');
-  if (rows.length === 0) {
-    listEl.innerHTML = `<div class="empty-state">Chưa có lần bán hàng nào.<br/>Bấm nút + để bán hàng.</div>`;
-    return;
-  }
-  listEl.innerHTML = groupRowsByDate(rows)
-    .map(({ date, rows: dayRows }) => {
-      const header = dateGroupHeaderHtml(date, dayRows, (s) => s.sellPrice * s.quantity);
-      const items = dayRows
-        .map((s) => {
-          const item = DB.getItem(s.itemId);
-          return `
-        <div class="list-item">
-          <div class="item-icon" ${item ? `data-action="view-item-detail" data-id="${item.id}"` : ''}>${categoryIcon(item?.category)}</div>
-          <div class="li-main" ${item ? `data-action="view-item-detail" data-id="${item.id}"` : ''}>
-            <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')} <span class="badge ban">Bán</span></div>
-            <div class="li-sub">SL ${s.quantity} × ${formatMoney(s.sellPrice)}</div>
-            <div class="li-sub">👤 ${escapeHtml(s.customerName || 'Khách lẻ')}${s.customerPhone ? ' · ' + escapeHtml(s.customerPhone) : ''}${s.customerAddress ? ' · ' + escapeHtml(s.customerAddress) : ''}</div>
-            ${s.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(s.imei)}</div>` : ''}
-          </div>
-          <div class="li-right">
-            <div class="li-amount">${formatMoney(s.sellPrice * s.quantity)}</div>
-            <div class="li-actions">
-              <button class="icon-btn" data-action="print-invoice" data-id="${s.id}">🖨️</button>
-              <button class="icon-btn" data-action="edit-sale" data-id="${s.id}">✏️</button>
-              <button class="icon-btn" data-action="delete-sale" data-id="${s.id}">🗑️</button>
+
+  function updateList() {
+    const q = (state.saleSearch || '').toLowerCase();
+    const rows = periodRows.filter((s) => {
+      if (!q) return true;
+      const item = DB.getItem(s.itemId);
+      return (
+        (item?.name || '').toLowerCase().includes(q) ||
+        (s.customerName || '').toLowerCase().includes(q) ||
+        (s.customerPhone || '').toLowerCase().includes(q) ||
+        (s.imei || '').toLowerCase().includes(q)
+      );
+    });
+    const summaryEl = document.getElementById('sale-summary');
+    const totalRevenue = rows.reduce((s, x) => s + x.sellPrice * x.quantity, 0);
+    summaryEl.innerHTML = `<div class="stat-grid" style="margin-bottom:10px">
+      <div class="stat-card"><div class="label">Số đơn bán</div><div class="value">${rows.length}</div></div>
+      <div class="stat-card"><div class="label">Tổng doanh thu</div><div class="value pos">${formatMoney(totalRevenue)}</div></div>
+    </div>`;
+
+    const listEl = document.getElementById('stock-list');
+    if (rows.length === 0) {
+      listEl.innerHTML = `<div class="empty-state">Không có lần bán hàng nào phù hợp.<br/>Bấm nút + để bán hàng.</div>`;
+      return;
+    }
+    listEl.innerHTML = groupRowsByDate(rows)
+      .map(({ date, rows: dayRows }) => {
+        const header = dateGroupHeaderHtml(date, dayRows, (s) => s.sellPrice * s.quantity);
+        const items = dayRows
+          .map((s) => {
+            const item = DB.getItem(s.itemId);
+            return `
+          <div class="list-item">
+            <div class="item-icon" ${item ? `data-action="view-item-detail" data-id="${item.id}"` : ''}>${categoryIcon(item?.category)}</div>
+            <div class="li-main" ${item ? `data-action="view-item-detail" data-id="${item.id}"` : ''}>
+              <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')} <span class="badge ban">Bán</span></div>
+              <div class="li-sub">SL ${s.quantity} × ${formatMoney(s.sellPrice)}</div>
+              <div class="li-sub">👤 ${escapeHtml(s.customerName || 'Khách lẻ')}${s.customerPhone ? ' · ' + escapeHtml(s.customerPhone) : ''}${s.customerAddress ? ' · ' + escapeHtml(s.customerAddress) : ''}</div>
+              ${s.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(s.imei)}</div>` : ''}
             </div>
-          </div>
-        </div>`;
-        })
-        .join('');
-      return header + items;
-    })
-    .join('');
+            <div class="li-right">
+              <div class="li-amount">${formatMoney(s.sellPrice * s.quantity)}</div>
+              <div class="li-actions">
+                <button class="icon-btn" data-action="print-invoice" data-id="${s.id}">🖨️</button>
+                <button class="icon-btn" data-action="edit-sale" data-id="${s.id}">✏️</button>
+                <button class="icon-btn" data-action="delete-sale" data-id="${s.id}">🗑️</button>
+              </div>
+            </div>
+          </div>`;
+          })
+          .join('');
+        return header + items;
+      })
+      .join('');
+  }
+
+  updateList();
+  const searchEl = document.getElementById('sale-search');
+  searchEl.addEventListener('input', () => {
+    state.saleSearch = searchEl.value;
+    updateList();
+  });
+  if (state.salePeriod === 'custom') wireCustomRangeInputs('sale');
 }
 
 function openSaleForm(s) {
@@ -2716,6 +2905,8 @@ const IMPORT_ALIASES = {
   itemName: ['Tên mặt hàng', 'Tên mặt hàng*', 'Tên', 'Mặt hàng', 'Tên hàng'],
   category: ['Danh mục', 'Nhóm hàng(3 Cấp)', 'Nhóm hàng'],
   barcode: ['Mã vạch', 'Mã vạch/QR', 'Barcode'],
+  productCode: ['Mã hàng', 'Mã sản phẩm', 'Mã SP', 'SKU'],
+  model: ['Model', 'Tên model'],
   costPrice: ['Giá nhập', 'Giá nhập*', 'Giá nhập mặc định', 'Giá vốn'],
   sellPrice: ['Giá bán', 'Giá bán*', 'Giá bán mặc định'],
   unit: ['Đơn vị', 'Đơn vị tính'],
@@ -2744,8 +2935,8 @@ const IMEI_FILE_ALIASES = {
 };
 
 const TEMPLATE_HEADERS = {
-  items: ['Tên mặt hàng', 'Danh mục', 'Mã vạch', 'Giá nhập', 'Giá bán', 'Đơn vị', 'Ghi chú'],
-  productlist: ['Tên hàng', 'Nhóm hàng(3 Cấp)', 'Mã vạch', 'Giá bán', 'Giá vốn', 'Tồn kho', 'Serial/IMEI'],
+  items: ['Tên mặt hàng', 'Danh mục', 'Mã vạch', 'Mã sản phẩm', 'Model', 'Giá nhập', 'Giá bán', 'Đơn vị', 'Ghi chú'],
+  productlist: ['Tên hàng', 'Nhóm hàng(3 Cấp)', 'Mã hàng', 'Mã vạch', 'Model', 'Giá bán', 'Giá vốn', 'Tồn kho', 'Serial/IMEI'],
   customers: ['Tên khách hàng', 'Số điện thoại', 'Địa chỉ', 'Ghi chú'],
   purchases: ['Ngày (yyyy-mm-dd)', 'Tên mặt hàng', 'Số lượng', 'Giá nhập', 'IMEI/Seri', 'Ghi chú'],
   sales: [
@@ -2755,10 +2946,10 @@ const TEMPLATE_HEADERS = {
   imeifile: ['IMEI', 'Product_Name', 'Model', 'Status', 'Giá nhập', 'Giá bán', 'Ngày nhập', 'Ngày bán', 'Notes'],
 };
 const TEMPLATE_SAMPLE_ROW = {
-  items: ['Tai nghe Bluetooth ABC', 'Khác', '', 150000, 250000, 'cái', ''],
+  items: ['Tai nghe Bluetooth ABC', 'Khác', '', 'SP001', '', 150000, 250000, 'cái', ''],
   productlist: [
-    ['Tivi Xiaomi 55 inch', 'Tivi xiaomi', '6941948700000', 8300000, 6800000, 5, '355600000101|355600000102|355600000103'],
-    ['Tai nghe Bluetooth ABC', 'Phụ kiện', '', 250000, 150000, 10, ''],
+    ['Tivi Xiaomi 55 inch', 'Tivi xiaomi', 'SP-TV001', '6941948700000', '', 8300000, 6800000, 5, '355600000101|355600000102|355600000103'],
+    ['Tai nghe Bluetooth ABC', 'Phụ kiện', '', '', '', 250000, 150000, 10, ''],
   ],
   customers: ['Nguyễn Văn A', '0909123456', '123 Đường ABC, Quận 1', ''],
   purchases: [todayStr(), 'Tai nghe Bluetooth ABC', 5, 150000, '', ''],
@@ -2934,6 +3125,8 @@ async function importItemsFromExcel(file) {
       name,
       category: fieldText(row, IMPORT_ALIASES.category) || existing?.category || '',
       barcode: fieldText(row, IMPORT_ALIASES.barcode) || existing?.barcode || '',
+      productCode: fieldText(row, IMPORT_ALIASES.productCode) || existing?.productCode || '',
+      model: fieldText(row, IMPORT_ALIASES.model) || existing?.model || '',
       defaultCostPrice: parseMoneyInput(getField(row, IMPORT_ALIASES.costPrice) ?? existing?.defaultCostPrice ?? 0),
       defaultSellPrice: parseMoneyInput(getField(row, IMPORT_ALIASES.sellPrice) ?? existing?.defaultSellPrice ?? 0),
       unit: fieldText(row, IMPORT_ALIASES.unit) || existing?.unit || 'cái',
@@ -2978,8 +3171,16 @@ async function importProductListFromExcel(file) {
       return;
     }
     const barcode = fieldText(row, IMPORT_ALIASES.barcode);
+    const productCode = fieldText(row, IMPORT_ALIASES.productCode);
+    const model = fieldText(row, IMPORT_ALIASES.model);
+    // Ưu tiên khớp theo Mã sản phẩm (mã hàng, ổn định nhất), rồi tới Mã vạch,
+    // cuối cùng mới tới tên — để "cập nhật lại toàn bộ sản phẩm" không bị tạo
+    // trùng khi tên hàng đổi nhẹ giữa các lần xuất file.
     const existing = DB.getItems().find(
-      (i) => (barcode && i.barcode && i.barcode === barcode) || i.name.trim().toLowerCase() === name.toLowerCase()
+      (i) =>
+        (productCode && i.productCode && i.productCode === productCode) ||
+        (barcode && i.barcode && i.barcode === barcode) ||
+        i.name.trim().toLowerCase() === name.toLowerCase()
     );
     const costPrice = parseMoneyInput(getField(row, IMPORT_ALIASES.costPrice) ?? existing?.defaultCostPrice ?? 0);
     const item = {
@@ -2987,6 +3188,8 @@ async function importProductListFromExcel(file) {
       name,
       category: fieldText(row, IMPORT_ALIASES.category) || existing?.category || '',
       barcode: barcode || existing?.barcode || '',
+      productCode: productCode || existing?.productCode || '',
+      model: model || existing?.model || '',
       defaultCostPrice: costPrice,
       defaultSellPrice: parseMoneyInput(getField(row, IMPORT_ALIASES.sellPrice) ?? existing?.defaultSellPrice ?? 0),
       unit: existing?.unit || 'cái',
@@ -3189,7 +3392,7 @@ async function importImeiFileFromExcel(file) {
       const notes = fieldText(row, IMEI_FILE_ALIASES.notes);
 
       const item = findOrCreateItemForImport(productName, '');
-      if (model && !item.note) DB.saveItem({ ...item, note: `Model: ${model}` });
+      if (model && item.model !== model) DB.saveItem({ ...item, model });
 
       if (!purchaseDate) {
         errors.push(`${rowLabel}: thiếu/sai Ngày nhập, bỏ qua dòng này`);
@@ -3273,7 +3476,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=20').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=21').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
