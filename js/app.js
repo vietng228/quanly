@@ -7,7 +7,7 @@ const CATEGORIES = [
   'Điều hòa',
   'Máy hút ẩm',
   'Máy lọc không khí',
-  'Dịch vụ cài đặt Tivi',
+  'Dịch vụ lắp đặt Tivi',
   'Khác',
 ];
 
@@ -18,7 +18,7 @@ const CATEGORY_ICONS = {
   'Điều hòa': '❄️',
   'Máy hút ẩm': '💧',
   'Máy lọc không khí': '🌬️',
-  'Dịch vụ cài đặt Tivi': '🔧',
+  'Dịch vụ lắp đặt Tivi': '🔧',
   'Khác': '📦',
 };
 function categoryIcon(cat) {
@@ -204,15 +204,28 @@ function onSheetClick(e) {
         document.getElementById('f-item-barcode').value = code;
       });
     },
-    'scan-for-purchase-imei': () => {
-      Scanner.open((code) => {
-        const el = document.getElementById('f-purchase-imei');
-        el.value = el.value ? el.value + ', ' + code : code;
-      });
-    },
     'scan-for-sale-imei': () => {
       Scanner.open((code) => {
         document.getElementById('f-sale-imei').value = code;
+      });
+    },
+    'add-purchase-imei-line': () => {
+      syncImeiLinesFromDom();
+      formDraft.imeiLines.push('');
+      renderImeiLines();
+    },
+    'remove-purchase-imei-line': () => {
+      syncImeiLinesFromDom();
+      formDraft.imeiLines.splice(Number(t.dataset.idx), 1);
+      if (formDraft.imeiLines.length === 0) formDraft.imeiLines.push('');
+      renderImeiLines();
+    },
+    'scan-purchase-imei-line': () => {
+      const idx = Number(t.dataset.idx);
+      Scanner.open((code) => {
+        syncImeiLinesFromDom();
+        formDraft.imeiLines[idx] = code;
+        renderImeiLines();
       });
     },
     'submit-item-form': submitItemForm,
@@ -625,9 +638,36 @@ function selectFormCustomer(c) {
   toast('Đã chọn khách: ' + c.name);
 }
 
+function imeiLineRowHtml(idx, value) {
+  const canRemove = formDraft.imeiLines && formDraft.imeiLines.length > 1;
+  return `
+    <div class="input-with-btn" style="margin-bottom:8px">
+      <input type="text" class="f-purchase-imei-line" data-idx="${idx}" value="${escapeHtml(value || '')}" placeholder="Máy ${idx + 1} — quét hoặc nhập tay" />
+      <button type="button" data-action="scan-purchase-imei-line" data-idx="${idx}">📷</button>
+      ${canRemove ? `<button type="button" class="icon-btn" data-action="remove-purchase-imei-line" data-idx="${idx}">✕</button>` : ''}
+    </div>`;
+}
+
+function renderImeiLines() {
+  const wrap = document.getElementById('imei-lines');
+  if (!wrap) return;
+  wrap.innerHTML = formDraft.imeiLines.map((v, i) => imeiLineRowHtml(i, v)).join('');
+}
+
+function syncImeiLinesFromDom() {
+  document.querySelectorAll('.f-purchase-imei-line').forEach((inp) => {
+    formDraft.imeiLines[Number(inp.dataset.idx)] = inp.value;
+  });
+}
+
 function openPurchaseForm(p) {
   const isEdit = !!p;
-  formDraft = { editId: p ? p.id : null, itemId: p ? p.itemId : null, formType: 'purchase' };
+  const initialQty = p?.quantity ?? 1;
+  const initialImeis = p?.imei ? p.imei.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  const lineCount = Math.max(initialQty, initialImeis.length, 1);
+  const imeiLines = [];
+  for (let i = 0; i < lineCount; i++) imeiLines.push(initialImeis[i] || '');
+  formDraft = { editId: p ? p.id : null, itemId: p ? p.itemId : null, formType: 'purchase', imeiLines };
   const item = p ? DB.getItem(p.itemId) : null;
   openSheet(`
     <div class="sheet-title">${isEdit ? 'Sửa lần nhập hàng' : 'Nhập hàng mới'}</div>
@@ -642,7 +682,7 @@ function openPurchaseForm(p) {
       </div>
       <div class="form-group">
         <label>Số lượng</label>
-        <input type="number" id="f-qty" value="${p?.quantity ?? 1}" min="1" />
+        <input type="number" id="f-qty" value="${initialQty}" min="1" />
       </div>
     </div>
     <div class="form-group">
@@ -650,12 +690,10 @@ function openPurchaseForm(p) {
       <input type="number" id="f-cost-price" value="${p?.costPrice ?? ''}" min="0" placeholder="0" />
     </div>
     <div class="form-group">
-      <label>IMEI / Số seri (tuỳ chọn)</label>
-      <div class="input-with-btn">
-        <input type="text" id="f-purchase-imei" value="${escapeHtml(p?.imei || '')}" placeholder="Quét hoặc nhập tay" />
-        <button type="button" data-action="scan-for-purchase-imei">📷</button>
-      </div>
-      <p class="help-text">Nếu nhập nhiều máy cùng lúc (SL &gt; 1), có thể ghi nhiều IMEI cách nhau bằng dấu phẩy.</p>
+      <label>IMEI / Số seri từng máy (tuỳ chọn)</label>
+      <div id="imei-lines"></div>
+      <button type="button" class="btn btn-secondary" data-action="add-purchase-imei-line" style="margin-top:2px">+ Thêm dòng IMEI</button>
+      <p class="help-text">Số dòng tự khớp theo Số lượng — mỗi dòng bấm 📷 để quét riêng cho từng máy.</p>
     </div>
     <div class="form-group">
       <label>Ghi chú</label>
@@ -666,17 +704,26 @@ function openPurchaseForm(p) {
       <button class="btn btn-primary" data-action="submit-purchase-form">Lưu</button>
     </div>
   `);
+  renderImeiLines();
+  document.getElementById('f-qty').addEventListener('input', (e) => {
+    syncImeiLinesFromDom();
+    const qty = Math.max(1, Number(e.target.value) || 1);
+    while (formDraft.imeiLines.length < qty) formDraft.imeiLines.push('');
+    renderImeiLines();
+  });
 }
 
 function submitPurchaseForm() {
   if (!formDraft.itemId) { toast('Vui lòng chọn mặt hàng', true); return; }
+  syncImeiLinesFromDom();
+  const imei = formDraft.imeiLines.map((s) => (s || '').trim()).filter(Boolean).join(', ');
   const p = {
     id: formDraft.editId,
     itemId: formDraft.itemId,
     date: document.getElementById('f-date').value || todayStr(),
     quantity: Number(document.getElementById('f-qty').value) || 1,
     costPrice: parseMoneyInput(document.getElementById('f-cost-price').value),
-    imei: document.getElementById('f-purchase-imei').value.trim(),
+    imei,
     note: document.getElementById('f-note').value.trim(),
   };
   DB.savePurchase(p);
