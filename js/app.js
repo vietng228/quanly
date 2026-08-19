@@ -32,6 +32,8 @@ const state = {
   itemSearch: '',
   itemCategoryFilter: 'all',
   customerSearch: '',
+  inventorySearch: '',
+  lookupQuery: '',
 };
 
 const TITLES = {
@@ -41,12 +43,14 @@ const TITLES = {
   customers: 'Khách hàng',
   more: 'Thêm',
   items: 'Mặt hàng',
+  inventory: 'Tồn kho',
+  lookup: 'Tra cứu',
   cashflow: 'Thu chi',
   settings: 'Cài đặt',
 };
 
 // các tab con nằm trong menu "Thêm"
-const MORE_SUBTABS = ['items', 'cashflow', 'settings'];
+const MORE_SUBTABS = ['items', 'inventory', 'lookup', 'cashflow', 'settings'];
 
 let formDraft = {}; // dữ liệu tạm khi đang mở form trong sheet
 
@@ -117,6 +121,8 @@ function render() {
   else if (state.tab === 'customers') renderCustomers(app);
   else if (state.tab === 'more') renderMore(app);
   else if (state.tab === 'items') renderItems(app);
+  else if (state.tab === 'inventory') renderInventory(app);
+  else if (state.tab === 'lookup') renderLookup(app);
   else if (state.tab === 'cashflow') renderCashflow(app);
   else if (state.tab === 'settings') renderSettings(app);
 }
@@ -156,6 +162,7 @@ function onAppClick(e) {
     'delete-sale': () => {
       if (confirmDialog('Xoá lần bán hàng này?')) { DB.deleteSale(id); toast('Đã xoá'); render(); }
     },
+    'print-invoice': () => printInvoice(DB.getSales().find((s) => s.id === id)),
     'add-customer': () => openCustomerForm(null),
     'edit-customer': () => openCustomerForm(DB.getCustomer(id)),
     'delete-customer': () => {
@@ -175,6 +182,14 @@ function onAppClick(e) {
     'trigger-restore': () => document.getElementById('restore-file-input').click(),
     'do-clear-all': doClearAll,
     'share-customers': shareCustomers,
+    'save-shop-info': () => {
+      DB.saveShopInfo({
+        name: document.getElementById('f-shop-name').value.trim(),
+        phone: document.getElementById('f-shop-phone').value.trim(),
+        address: document.getElementById('f-shop-address').value.trim(),
+      });
+      toast('Đã lưu thông tin cửa hàng');
+    },
   };
   if (actions[action]) actions[action]();
 }
@@ -341,6 +356,8 @@ function computeStats(period) {
   const thuKhac = transactions.filter((t) => t.type === 'thu').reduce((s, t) => s + t.amount, 0);
   const chiKhac = transactions.filter((t) => t.type === 'chi').reduce((s, t) => s + t.amount, 0);
   const netProfit = grossProfit + thuKhac - chiKhac;
+  const grossMarginPct = revenue > 0 ? (grossProfit / revenue) * 100 : 0;
+  const netMarginPct = revenue > 0 ? (netProfit / revenue) * 100 : 0;
 
   // top mặt hàng bán chạy trong kỳ
   const byItem = {};
@@ -355,7 +372,11 @@ function computeStats(period) {
     .sort((a, b) => b.revenue - a.revenue)
     .slice(0, 5);
 
-  return { label, revenue, costOfSold, grossProfit, purchaseSpend, thuKhac, chiKhac, netProfit, salesCount: sales.length, top };
+  return {
+    label, revenue, costOfSold, grossProfit, purchaseSpend, thuKhac, chiKhac, netProfit,
+    grossMarginPct, netMarginPct,
+    salesCount: sales.length, top,
+  };
 }
 
 function renderDashboard(app) {
@@ -382,6 +403,12 @@ function renderDashboard(app) {
       <div class="stat-card">
         <div class="label">Lợi nhuận gộp</div>
         <div class="value ${s.grossProfit >= 0 ? 'pos' : 'neg'}">${formatMoney(s.grossProfit)}</div>
+        <div class="li-sub" style="margin-top:4px">${s.grossMarginPct.toFixed(1)}% doanh thu</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Tỉ suất LN ròng</div>
+        <div class="value ${s.netMarginPct >= 0 ? 'pos' : 'neg'}">${s.netMarginPct.toFixed(1)}%</div>
+        <div class="li-sub" style="margin-top:4px">trên doanh thu</div>
       </div>
       <div class="stat-card">
         <div class="label">Tiền nhập hàng</div>
@@ -482,6 +509,188 @@ function renderItems(app) {
   document.getElementById('item-search').addEventListener('input', (e) => {
     state.itemSearch = e.target.value;
     renderItems(app);
+  });
+}
+
+// ---------------------------------------------------------------------
+// INVENTORY (Tồn kho) — tự động tính từ lịch sử nhập/bán
+// ---------------------------------------------------------------------
+const LOW_STOCK_THRESHOLD = 2;
+
+function computeInventory() {
+  const items = DB.getItems();
+  const purchasedByItem = {};
+  DB.getPurchases().forEach((p) => {
+    purchasedByItem[p.itemId] = (purchasedByItem[p.itemId] || 0) + p.quantity;
+  });
+  const soldByItem = {};
+  DB.getSales().forEach((s) => {
+    soldByItem[s.itemId] = (soldByItem[s.itemId] || 0) + s.quantity;
+  });
+  return items.map((item) => {
+    const purchased = purchasedByItem[item.id] || 0;
+    const sold = soldByItem[item.id] || 0;
+    return { item, purchased, sold, stock: purchased - sold };
+  });
+}
+
+function renderInventory(app) {
+  const all = computeInventory();
+  const q = (state.inventorySearch || '').toLowerCase();
+  const inv = all.filter((x) => !q || x.item.name.toLowerCase().includes(q));
+  const outCount = all.filter((x) => x.stock <= 0).length;
+  const lowCount = all.filter((x) => x.stock > 0 && x.stock <= LOW_STOCK_THRESHOLD).length;
+
+  app.innerHTML = `
+    ${backToMoreLink()}
+    <input type="text" class="searchbox" id="inventory-search" placeholder="🔍 Tìm mặt hàng tồn kho..." value="${escapeHtml(state.inventorySearch || '')}" />
+    <div class="stat-grid" style="margin-bottom:14px">
+      <div class="stat-card">
+        <div class="label">Hết hàng</div>
+        <div class="value neg">${outCount}</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Sắp hết (≤ ${LOW_STOCK_THRESHOLD})</div>
+        <div class="value" style="color:#b45309">${lowCount}</div>
+      </div>
+    </div>
+    <div id="inventory-list"></div>
+  `;
+  const listEl = document.getElementById('inventory-list');
+  if (inv.length === 0) {
+    listEl.innerHTML = `<div class="empty-state">Không có mặt hàng nào phù hợp.</div>`;
+  } else {
+    const groups = {};
+    inv.forEach((x) => {
+      const cat = x.item.category || 'Khác';
+      groups[cat] = groups[cat] || [];
+      groups[cat].push(x);
+    });
+    const sortedCats = Object.keys(groups).sort((a, b) => a.localeCompare(b, 'vi'));
+    listEl.innerHTML = sortedCats
+      .map(
+        (cat) => `
+      <div class="section-title">${categoryIcon(cat)} ${escapeHtml(cat)}</div>
+      ${groups[cat]
+        .map((x) => {
+          const badge =
+            x.stock <= 0
+              ? '<span class="badge chi">Hết hàng</span>'
+              : x.stock <= LOW_STOCK_THRESHOLD
+              ? '<span class="badge nhap">Sắp hết</span>'
+              : '';
+          return `
+        <div class="list-item">
+          <div class="item-icon">${categoryIcon(x.item.category)}</div>
+          <div class="li-main">
+            <div class="li-title">${escapeHtml(x.item.name)} ${badge}</div>
+            <div class="li-sub">Đã nhập ${x.purchased} · Đã bán ${x.sold}</div>
+          </div>
+          <div class="li-main" style="flex:0">
+            <div class="li-amount ${x.stock <= 0 ? 'neg' : ''}">${x.stock} ${escapeHtml(x.item.unit || '')}</div>
+          </div>
+        </div>`;
+        })
+        .join('')}`
+      )
+      .join('');
+  }
+  document.getElementById('inventory-search').addEventListener('input', (e) => {
+    state.inventorySearch = e.target.value;
+    renderInventory(app);
+  });
+}
+
+// ---------------------------------------------------------------------
+// LOOKUP (Tra cứu theo IMEI / SĐT khách)
+// ---------------------------------------------------------------------
+function renderLookup(app) {
+  const raw = state.lookupQuery || '';
+  const q = raw.trim().toLowerCase();
+
+  app.innerHTML = `
+    ${backToMoreLink()}
+    <input type="text" class="searchbox" id="lookup-search" placeholder="🔍 Nhập IMEI/số seri máy hoặc SĐT khách..." value="${escapeHtml(raw)}" />
+    <div id="lookup-results"></div>
+  `;
+  const resultsEl = document.getElementById('lookup-results');
+
+  if (!q) {
+    resultsEl.innerHTML = `<div class="empty-state">Nhập số IMEI/seri máy hoặc số điện thoại khách hàng để tra cứu nhanh lịch sử nhập/bán liên quan.</div>`;
+    document.getElementById('lookup-search').addEventListener('input', (e) => {
+      state.lookupQuery = e.target.value;
+      renderLookup(app);
+    });
+    return;
+  }
+
+  const sales = DB.getSales().filter(
+    (s) => (s.imei || '').toLowerCase().includes(q) || (s.customerPhone || '').toLowerCase().includes(q)
+  );
+  const purchases = DB.getPurchases().filter((p) => (p.imei || '').toLowerCase().includes(q));
+  const customers = DB.getCustomers().filter((c) => (c.phone || '').toLowerCase().includes(q));
+
+  if (sales.length === 0 && purchases.length === 0 && customers.length === 0) {
+    resultsEl.innerHTML = `<div class="empty-state">Không tìm thấy kết quả nào phù hợp với "${escapeHtml(raw)}".</div>`;
+  } else {
+    let html = '';
+    if (customers.length) {
+      html += `<div class="section-title">👤 Khách hàng (${customers.length})</div>`;
+      html += customers
+        .map(
+          (c) => `
+        <div class="list-item">
+          <div class="li-main">
+            <div class="li-title">${escapeHtml(c.name)}</div>
+            <div class="li-sub">${escapeHtml(c.phone || '')}${c.address ? ' · ' + escapeHtml(c.address) : ''}</div>
+          </div>
+        </div>`
+        )
+        .join('');
+    }
+    if (sales.length) {
+      html += `<div class="section-title">💵 Lần bán liên quan (${sales.length})</div>`;
+      html += sales
+        .map((s) => {
+          const item = DB.getItem(s.itemId);
+          return `
+        <div class="list-item">
+          <div class="item-icon">${categoryIcon(item?.category)}</div>
+          <div class="li-main">
+            <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</div>
+            <div class="li-sub">${formatDateVN(s.date)} · SL ${s.quantity} × ${formatMoney(s.sellPrice)}</div>
+            <div class="li-sub">👤 ${escapeHtml(s.customerName || 'Khách lẻ')}${s.customerPhone ? ' · ' + escapeHtml(s.customerPhone) : ''}</div>
+            ${s.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(s.imei)}</div>` : ''}
+          </div>
+          <div class="li-actions">
+            <button class="icon-btn" data-action="print-invoice" data-id="${s.id}">🖨️</button>
+          </div>
+        </div>`;
+        })
+        .join('');
+    }
+    if (purchases.length) {
+      html += `<div class="section-title">📥 Lần nhập liên quan (${purchases.length})</div>`;
+      html += purchases
+        .map((p) => {
+          const item = DB.getItem(p.itemId);
+          return `
+        <div class="list-item">
+          <div class="item-icon">${categoryIcon(item?.category)}</div>
+          <div class="li-main">
+            <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</div>
+            <div class="li-sub">${formatDateVN(p.date)} · SL ${p.quantity} × ${formatMoney(p.costPrice)}</div>
+            ${p.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(p.imei)}</div>` : ''}
+          </div>
+        </div>`;
+        })
+        .join('');
+    }
+    resultsEl.innerHTML = html;
+  }
+  document.getElementById('lookup-search').addEventListener('input', (e) => {
+    state.lookupQuery = e.target.value;
+    renderLookup(app);
   });
 }
 
@@ -761,6 +970,7 @@ function renderSales(app) {
             <div class="li-amount">${formatMoney(s.sellPrice * s.quantity)}</div>
           </div>
           <div class="li-actions">
+            <button class="icon-btn" data-action="print-invoice" data-id="${s.id}">🖨️</button>
             <button class="icon-btn" data-action="edit-sale" data-id="${s.id}">✏️</button>
             <button class="icon-btn" data-action="delete-sale" data-id="${s.id}">🗑️</button>
           </div>
@@ -873,10 +1083,81 @@ function submitSaleForm() {
     customerAddress,
     note: document.getElementById('f-note').value.trim(),
   };
-  DB.saveSale(s);
+  const isNewSale = !s.id;
+  const saved = DB.saveSale(s);
   toast('Đã lưu lần bán hàng');
   closeSheet();
   render();
+  if (isNewSale) printInvoice(saved);
+}
+
+function printInvoice(sale) {
+  if (!sale) { toast('Không tìm thấy đơn bán để in', true); return; }
+  const item = DB.getItem(sale.itemId);
+  const shop = DB.getShopInfo();
+  const total = sale.sellPrice * sale.quantity;
+  const win = window.open('', '_blank', 'width=380,height=600');
+  if (!win) {
+    toast('Trình duyệt đang chặn cửa sổ in. Hãy cho phép popup rồi bấm in lại.', true);
+    return;
+  }
+  win.document.write(`<!DOCTYPE html>
+<html lang="vi"><head><meta charset="UTF-8" />
+<title>Hoá đơn bán hàng</title>
+<style>
+  @page { margin: 4mm; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Courier New', Courier, monospace; width: 78mm; margin: 0 auto; padding: 6px; font-size: 12.5px; color: #000; }
+  .center { text-align: center; }
+  .shop-name { font-size: 15px; font-weight: bold; }
+  hr { border: none; border-top: 1px dashed #000; margin: 8px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  td { padding: 2px 0; vertical-align: top; }
+  .right { text-align: right; }
+  .title-row { font-weight: bold; text-align: center; margin: 4px 0; letter-spacing: 1px; }
+  .total-row td { font-weight: bold; font-size: 14.5px; padding-top: 6px; }
+  .footer { text-align: center; margin-top: 10px; font-size: 11.5px; }
+  .row-line { display: flex; justify-content: space-between; gap: 8px; }
+</style>
+</head>
+<body>
+  <div class="center">
+    ${shop.name ? `<div class="shop-name">${escapeHtml(shop.name)}</div>` : ''}
+    ${shop.address ? `<div>${escapeHtml(shop.address)}</div>` : ''}
+    ${shop.phone ? `<div>ĐT: ${escapeHtml(shop.phone)}</div>` : ''}
+  </div>
+  <hr />
+  <div class="title-row">HOÁ ĐƠN BÁN HÀNG</div>
+  <div class="row-line"><span>Ngày:</span><span>${formatDateVN(sale.date)}</span></div>
+  <div class="row-line"><span>Khách:</span><span>${escapeHtml(sale.customerName || 'Khách lẻ')}</span></div>
+  ${sale.customerPhone ? `<div class="row-line"><span>SĐT:</span><span>${escapeHtml(sale.customerPhone)}</span></div>` : ''}
+  ${sale.customerAddress ? `<div>Địa chỉ: ${escapeHtml(sale.customerAddress)}</div>` : ''}
+  <hr />
+  <table>
+    <tr><td colspan="2">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</td></tr>
+    <tr>
+      <td>${sale.quantity} x ${formatMoney(sale.sellPrice)}</td>
+      <td class="right">${formatMoney(total)}</td>
+    </tr>
+    ${sale.imei ? `<tr><td colspan="2">IMEI/Seri: ${escapeHtml(sale.imei)}</td></tr>` : ''}
+  </table>
+  <hr />
+  <table>
+    <tr class="total-row"><td>TỔNG CỘNG</td><td class="right">${formatMoney(total)}</td></tr>
+  </table>
+  <hr />
+  ${sale.note ? `<div>Ghi chú: ${escapeHtml(sale.note)}</div>` : ''}
+  <div class="footer">Cảm ơn quý khách!</div>
+</body></html>`);
+  win.document.close();
+  setTimeout(() => {
+    try {
+      win.focus();
+      win.print();
+    } catch (e) {
+      // bỏ qua nếu cửa sổ đã bị đóng
+    }
+  }, 350);
 }
 
 // ---------------------------------------------------------------------
@@ -1010,6 +1291,14 @@ function renderMore(app) {
   app.innerHTML = `
     <div class="list-item" data-action="go-tab" data-tab="items">
       <div class="li-main"><div class="li-title">📦 Mặt hàng</div><div class="li-sub">Quản lý danh mục sản phẩm</div></div>
+      <span>›</span>
+    </div>
+    <div class="list-item" data-action="go-tab" data-tab="inventory">
+      <div class="li-main"><div class="li-title">📊 Tồn kho</div><div class="li-sub">Số lượng còn lại theo mặt hàng (tự tính từ nhập/bán)</div></div>
+      <span>›</span>
+    </div>
+    <div class="list-item" data-action="go-tab" data-tab="lookup">
+      <div class="li-main"><div class="li-title">🔍 Tra cứu</div><div class="li-sub">Tìm theo IMEI máy hoặc số điện thoại khách</div></div>
       <span>›</span>
     </div>
     <div class="list-item" data-action="go-tab" data-tab="cashflow">
@@ -1152,11 +1441,28 @@ function renderSettings(app) {
     transactions: DB.getTransactions().length,
     customers: DB.getCustomers().length,
   };
+  const shop = DB.getShopInfo();
   app.innerHTML = `
     ${backToMoreLink()}
     <div class="settings-item">
       <h3>📦 Dữ liệu hiện có</h3>
       <p>${counts.items} mặt hàng · ${counts.purchases} lần nhập · ${counts.sales} lần bán · ${counts.transactions} khoản thu/chi · ${counts.customers} khách hàng</p>
+    </div>
+    <div class="settings-item">
+      <h3>🏪 Thông tin cửa hàng (hiện trên hoá đơn in)</h3>
+      <div class="form-group">
+        <label>Tên cửa hàng</label>
+        <input type="text" id="f-shop-name" value="${escapeHtml(shop.name || '')}" placeholder="VD: Điện máy ABC" />
+      </div>
+      <div class="form-group">
+        <label>Số điện thoại</label>
+        <input type="tel" id="f-shop-phone" value="${escapeHtml(shop.phone || '')}" placeholder="09xxxxxxxx" />
+      </div>
+      <div class="form-group">
+        <label>Địa chỉ</label>
+        <input type="text" id="f-shop-address" value="${escapeHtml(shop.address || '')}" placeholder="Địa chỉ cửa hàng..." />
+      </div>
+      <button class="btn btn-primary" data-action="save-shop-info">Lưu thông tin cửa hàng</button>
     </div>
     <div class="settings-item">
       <h3>⬇️ Sao lưu dữ liệu (Backup)</h3>

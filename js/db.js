@@ -204,6 +204,19 @@ const DB = {
     writeList(DB_KEYS.transactions, []);
     writeList(DB_KEYS.customers, []);
   },
+
+  // ---------- THÔNG TIN CỬA HÀNG (hiện trên hoá đơn in) ----------
+  getShopInfo() {
+    try {
+      const raw = localStorage.getItem(DB_KEYS.meta);
+      return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+      return {};
+    }
+  },
+  saveShopInfo(info) {
+    localStorage.setItem(DB_KEYS.meta, JSON.stringify(info || {}));
+  },
 };
 
 window.DB = DB;
