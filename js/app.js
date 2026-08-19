@@ -290,6 +290,7 @@ function onAppClick(e) {
       }
     },
     'filter-item-category': () => { state.itemCategoryFilter = t.dataset.cat; render(); },
+    'view-item-stock': () => openItemStockSheet(t.dataset.name),
     'add-purchase': () => openPurchaseForm(null),
     'edit-purchase': () => openPurchaseForm(DB.getPurchases().find((p) => p.id === id)),
     'delete-purchase': () => {
@@ -463,6 +464,15 @@ function onSheetClick(e) {
         formDraft.imeiLines[idx] = code;
         renderImeiLines();
       });
+    },
+    'edit-item': () => openItemForm(DB.getItem(t.dataset.id)),
+    'delete-item': () => {
+      if (confirmDialog('Xoá mặt hàng này? (Các lần nhập/bán liên quan vẫn giữ nguyên lịch sử)')) {
+        DB.deleteItem(t.dataset.id);
+        toast('Đã xoá mặt hàng');
+        closeSheet();
+        render();
+      }
     },
     'submit-item-form': submitItemForm,
     'submit-purchase-form': submitPurchaseForm,
@@ -702,6 +712,10 @@ function renderItems(app) {
     if (items.length === 0) {
       listEl.innerHTML = `<div class="empty-state">Chưa có mặt hàng nào phù hợp.<br/>Bấm nút + để thêm mặt hàng.</div>`;
     } else {
+      // Tra cứu nhanh số đã nhập/đã bán theo từng item id để tính tồn kho.
+      const invByItemId = {};
+      computeInventory().forEach((x) => { invByItemId[x.item.id] = x; });
+
       const groups = {};
       items.forEach((i) => {
         const cat = i.category || 'Khác';
@@ -710,26 +724,52 @@ function renderItems(app) {
       });
       const sortedCats = Object.keys(groups).sort((a, b) => a.localeCompare(b, 'vi'));
       listEl.innerHTML = sortedCats
-        .map(
-          (cat) => `
-        <div class="section-title">${categoryIcon(cat)} ${escapeHtml(cat)} (${groups[cat].length})</div>
-        ${groups[cat]
-          .map(
-            (i) => `
-          <div class="list-item">
-            <div class="item-icon">${categoryIcon(i.category)}</div>
+        .map((cat) => {
+          // Gộp các mặt hàng trùng tên (không phân biệt hoa/thường, khoảng
+          // trắng đầu/cuối) trong cùng danh mục thành 1 dòng hiển thị, cộng
+          // dồn số đã nhập/đã bán để dễ nhìn — vẫn giữ nguyên các bản ghi gốc
+          // bên dưới (sửa/xoá từng mục cụ thể qua sheet chi tiết khi có > 1).
+          const nameGroups = new Map();
+          groups[cat].forEach((i) => {
+            const key = (i.name || '').trim().toLowerCase();
+            if (!nameGroups.has(key)) nameGroups.set(key, []);
+            nameGroups.get(key).push(i);
+          });
+          const rows = [...nameGroups.values()]
+            .sort((a, b) => a[0].name.localeCompare(b[0].name, 'vi'))
+            .map((groupItems) => {
+              const first = groupItems[0];
+              const merged = groupItems.length > 1;
+              const purchased = groupItems.reduce((sum, i) => sum + (invByItemId[i.id]?.purchased || 0), 0);
+              const sold = groupItems.reduce((sum, i) => sum + (invByItemId[i.id]?.sold || 0), 0);
+              const stock = purchased - sold;
+              const stockBadge =
+                stock <= 0
+                  ? '<span class="badge chi">Hết hàng</span>'
+                  : stock <= LOW_STOCK_THRESHOLD
+                  ? '<span class="badge nhap">Sắp hết</span>'
+                  : '<span class="badge ban">Còn hàng</span>';
+              return `
+          <div class="list-item" data-action="view-item-stock" data-name="${escapeHtml(first.name)}">
+            <div class="item-icon">${categoryIcon(first.category)}</div>
             <div class="li-main">
-              <div class="li-title">${escapeHtml(i.name)}</div>
-              <div class="li-sub">Nhập ${formatMoney(i.defaultCostPrice)} · Bán ${formatMoney(i.defaultSellPrice)}${i.barcode ? ' · #' + escapeHtml(i.barcode) : ''}</div>
+              <div class="li-title">${escapeHtml(first.name)} ${merged ? `<span class="badge nhap">🔗 Gộp ${groupItems.length}</span>` : ''}</div>
+              <div class="li-sub">Nhập ${formatMoney(first.defaultCostPrice)} · Bán ${formatMoney(first.defaultSellPrice)}${first.barcode && !merged ? ' · #' + escapeHtml(first.barcode) : ''}</div>
+              <div class="li-sub">Đã nhập ${purchased} · Đã bán ${sold} · Tồn ${stock} ${stockBadge}</div>
             </div>
-            <div class="li-actions">
-              <button class="icon-btn" data-action="edit-item" data-id="${i.id}">✏️</button>
-              <button class="icon-btn" data-action="delete-item" data-id="${i.id}">🗑️</button>
-            </div>
-          </div>`
-          )
-          .join('')}`
-        )
+            ${
+              merged
+                ? ''
+                : `<div class="li-actions">
+              <button class="icon-btn" data-action="edit-item" data-id="${first.id}">✏️</button>
+              <button class="icon-btn" data-action="delete-item" data-id="${first.id}">🗑️</button>
+            </div>`
+            }
+          </div>`;
+            })
+            .join('');
+          return `<div class="section-title">${categoryIcon(cat)} ${escapeHtml(cat)} (${nameGroups.size})</div>${rows}`;
+        })
         .join('');
     }
   }
@@ -740,6 +780,80 @@ function renderItems(app) {
     state.itemSearch = e.target.value;
     updateItemsList();
   });
+}
+
+// Bottom sheet hiển thị chi tiết tồn kho khi bấm vào 1 dòng mặt hàng trong
+// danh sách — gộp số liệu của tất cả bản ghi trùng tên (nếu có), và nếu có
+// hơn 1 bản ghi thì liệt kê từng bản ghi gốc kèm nút sửa/xoá riêng.
+function openItemStockSheet(name) {
+  const key = (name || '').trim().toLowerCase();
+  const inv = computeInventory().filter((x) => (x.item.name || '').trim().toLowerCase() === key);
+  if (inv.length === 0) {
+    toast('Không tìm thấy mặt hàng', true);
+    return;
+  }
+  const first = inv[0].item;
+  const totalPurchased = inv.reduce((s, x) => s + x.purchased, 0);
+  const totalSold = inv.reduce((s, x) => s + x.sold, 0);
+  const totalStock = totalPurchased - totalSold;
+  const stockBadge =
+    totalStock <= 0
+      ? '<span class="badge chi">Hết hàng</span>'
+      : totalStock <= LOW_STOCK_THRESHOLD
+      ? '<span class="badge nhap">Sắp hết</span>'
+      : '<span class="badge ban">Còn hàng</span>';
+
+  const breakdownHtml =
+    inv.length > 1
+      ? `
+    <div class="section-title" style="margin-top:18px">Chi tiết theo từng bản ghi (${inv.length})</div>
+    ${inv
+      .map((x) => {
+        const i = x.item;
+        const st = x.purchased - x.sold;
+        return `
+      <div class="list-item">
+        <div class="item-icon">${categoryIcon(i.category)}</div>
+        <div class="li-main">
+          <div class="li-title">${escapeHtml(i.category || 'Khác')}${i.barcode ? ' · #' + escapeHtml(i.barcode) : ''}</div>
+          <div class="li-sub">Nhập ${formatMoney(i.defaultCostPrice)} · Bán ${formatMoney(i.defaultSellPrice)}</div>
+          <div class="li-sub">Đã nhập ${x.purchased} · Đã bán ${x.sold} · Tồn ${st}</div>
+        </div>
+        <div class="li-actions">
+          <button class="icon-btn" data-action="edit-item" data-id="${i.id}">✏️</button>
+          <button class="icon-btn" data-action="delete-item" data-id="${i.id}">🗑️</button>
+        </div>
+      </div>`;
+      })
+      .join('')}
+  `
+      : `
+    <div class="btn-row">
+      <button class="btn btn-secondary" data-action="edit-item" data-id="${first.id}">✏️ Sửa</button>
+      <button class="btn btn-danger" data-action="delete-item" data-id="${first.id}">🗑️ Xoá</button>
+    </div>`;
+
+  openSheet(`
+    <div class="sheet-title">📦 ${escapeHtml(first.name)}</div>
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="label">Đã nhập</div>
+        <div class="value">${totalPurchased}</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Đã bán</div>
+        <div class="value">${totalSold}</div>
+      </div>
+      <div class="stat-card wide">
+        <div class="label">Tồn kho hiện tại</div>
+        <div class="value ${totalStock <= 0 ? 'neg' : 'pos'}">${totalStock} ${stockBadge}</div>
+      </div>
+    </div>
+    ${breakdownHtml}
+    <div class="btn-row">
+      <button class="btn btn-secondary" data-action="close-sheet">Đóng</button>
+    </div>
+  `);
 }
 
 // ---------------------------------------------------------------------
@@ -2612,7 +2726,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=13').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=14').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
