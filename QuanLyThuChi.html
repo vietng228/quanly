@@ -3883,7 +3883,19 @@ function onSheetClick(e) {
     'scan-for-sale-imei': () => {
       Scanner.open((code) => {
         document.getElementById('f-sale-imei').value = code;
+        renderSaleImeiSuggestions();
       });
+    },
+    'pick-sale-imei': () => {
+      const input = document.getElementById('f-sale-imei');
+      if (!input) return;
+      const current = input.value.split(',').map((s) => s.trim()).filter(Boolean);
+      const imei = t.dataset.imei;
+      const idx = current.findIndex((x) => x.toLowerCase() === imei.toLowerCase());
+      if (idx >= 0) current.splice(idx, 1);
+      else current.push(imei);
+      input.value = current.join(', ');
+      renderSaleImeiSuggestions();
     },
     'add-purchase-imei-line': () => {
       syncImeiLinesFromDom();
@@ -4793,7 +4805,67 @@ function selectFormItem(item) {
   if (formDraft.formType === 'sale') {
     const sellInput = document.getElementById('f-sell-price');
     if (sellInput && !sellInput.value) sellInput.value = item.defaultSellPrice || '';
+    renderSaleImeiSuggestions();
   }
+}
+
+// Các IMEI/số seri của 1 mặt hàng đã nhập nhưng CHƯA bán (còn tồn kho) — dùng
+// để gợi ý chọn nhanh khi tạo lần bán, đỡ phải gõ/quét lại tay. excludeSaleId
+// dùng khi đang SỬA 1 lần bán: IMEI đã gán sẵn cho chính lần bán đó vẫn được
+// coi là "còn tồn" (không bị coi là đã bán bởi chính nó).
+function getAvailableImeisForItem(itemId, excludeSaleId) {
+  const purchasedImeis = [];
+  DB.getPurchases()
+    .filter((p) => p.itemId === itemId)
+    .forEach((p) => {
+      (p.imei || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .forEach((im) => purchasedImeis.push(im));
+    });
+  const soldImeis = new Set();
+  DB.getSales()
+    .filter((s) => s.itemId === itemId && s.id !== excludeSaleId)
+    .forEach((s) => {
+      (s.imei || '')
+        .split(',')
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .forEach((im) => soldImeis.add(im.toLowerCase()));
+    });
+  return purchasedImeis.filter((im) => !soldImeis.has(im.toLowerCase()));
+}
+
+// Vẽ danh sách chip IMEI còn tồn kho của mặt hàng đang chọn trong form Bán
+// hàng — bấm vào 1 chip để thêm/bỏ IMEI đó vào ô nhập (không cần gõ tay).
+function renderSaleImeiSuggestions() {
+  const wrap = document.getElementById('sale-imei-suggestions');
+  if (!wrap) return;
+  if (!formDraft.itemId) {
+    wrap.innerHTML = '';
+    return;
+  }
+  const available = getAvailableImeisForItem(formDraft.itemId, formDraft.editId);
+  if (available.length === 0) {
+    wrap.innerHTML = '';
+    return;
+  }
+  const input = document.getElementById('f-sale-imei');
+  const selected = new Set(
+    (input?.value || '')
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+  );
+  wrap.innerHTML =
+    `<p class="help-text" style="width:100%; margin:6px 0 4px">📦 IMEI còn tồn kho (bấm để chọn):</p>` +
+    available
+      .map(
+        (im) =>
+          `<button type="button" class="chip ${selected.has(im.toLowerCase()) ? 'active' : ''}" data-action="pick-sale-imei" data-imei="${escapeHtml(im)}">${escapeHtml(im)}</button>`
+      )
+      .join('');
 }
 
 function selectFormCustomer(c) {
@@ -5002,6 +5074,7 @@ function openSaleForm(s) {
         <input type="text" id="f-sale-imei" value="${escapeHtml(s?.imei || '')}" placeholder="Quét hoặc nhập tay" />
         <button type="button" data-action="scan-for-sale-imei">📷</button>
       </div>
+      <div id="sale-imei-suggestions" class="chip-row" style="flex-wrap:wrap; margin-bottom:0"></div>
       <p class="help-text">Dùng để tra cứu bảo hành sau này theo từng máy đã bán.</p>
     </div>
     <div class="form-row">
@@ -5046,6 +5119,8 @@ function openSaleForm(s) {
       <button class="btn btn-primary" data-action="submit-sale-form">Lưu</button>
     </div>
   `);
+  renderSaleImeiSuggestions();
+  document.getElementById('f-sale-imei').addEventListener('input', renderSaleImeiSuggestions);
 }
 
 function submitSaleForm() {
@@ -6421,7 +6496,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=15').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=16').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
