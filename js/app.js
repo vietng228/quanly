@@ -1104,10 +1104,34 @@ function computeInventory() {
   DB.getSales().forEach((s) => {
     soldByItem[s.itemId] = (soldByItem[s.itemId] || 0) + s.quantity;
   });
+  // Giá trị tồn kho hiện tại: tính theo FIFO trên đúng giá nhập của từng lô
+  // (trừ dần số đã bán từ lô nhập cũ nhất trước) — KHÔNG chia bình quân giá,
+  // giữ đúng nguyên tắc "giá nhập cố định theo từng lần nhập" của cửa hàng.
+  const purchasesByItem = {};
+  DB.getPurchases().forEach((p) => {
+    (purchasesByItem[p.itemId] = purchasesByItem[p.itemId] || []).push(p);
+  });
   return items.map((item) => {
     const purchased = purchasedByItem[item.id] || 0;
     const sold = soldByItem[item.id] || 0;
-    return { item, purchased, sold, stock: purchased - sold };
+    const stock = purchased - sold;
+    let stockValue = 0;
+    if (stock > 0) {
+      const lots = (purchasesByItem[item.id] || [])
+        .slice()
+        .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.createdAt || 0) - (b.createdAt || 0));
+      let toSkip = sold;
+      lots.forEach((p) => {
+        let qty = p.quantity;
+        if (toSkip > 0) {
+          const skip = Math.min(toSkip, qty);
+          qty -= skip;
+          toSkip -= skip;
+        }
+        if (qty > 0) stockValue += qty * (p.costPrice || 0);
+      });
+    }
+    return { item, purchased, sold, stock, stockValue };
   });
 }
 
@@ -1135,11 +1159,16 @@ function renderInventory(app) {
   const all = computeInventory();
   const outCount = all.filter((x) => x.stock <= 0).length;
   const lowCount = all.filter((x) => x.stock > 0 && x.stock <= LOW_STOCK_THRESHOLD).length;
+  const totalStockValue = all.reduce((s, x) => s + (x.stockValue || 0), 0);
 
   app.innerHTML = `
     ${backToMoreLink()}
     <input type="text" class="searchbox" id="inventory-search" placeholder="🔍 Tìm mặt hàng tồn kho..." value="${escapeHtml(state.inventorySearch || '')}" />
     <div class="stat-grid" style="margin-bottom:14px">
+      <div class="stat-card wide">
+        <div class="label">💰 Giá trị hàng đang tồn (theo giá nhập)</div>
+        <div class="value">${formatMoney(totalStockValue)}</div>
+      </div>
       <div class="stat-card">
         <div class="label">Hết hàng</div>
         <div class="value neg">${outCount}</div>
@@ -1186,7 +1215,7 @@ function renderInventory(app) {
             <div class="item-icon">${categoryIcon(x.item.category)}</div>
             <div class="li-main">
               <div class="li-title">${escapeHtml(x.item.name)} ${badge}</div>
-              <div class="li-sub">Đã nhập ${x.purchased} · Đã bán ${x.sold}</div>
+              <div class="li-sub">Đã nhập ${x.purchased} · Đã bán ${x.sold}${x.stock > 0 ? ' · Trị giá tồn ' + formatMoney(x.stockValue) : ''}</div>
             </div>
             <div class="li-main" style="flex:0">
               <div class="li-amount ${x.stock <= 0 ? 'neg' : ''}">${x.stock} ${escapeHtml(x.item.unit || '')}</div>
@@ -3244,7 +3273,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=19').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=20').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
