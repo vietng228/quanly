@@ -1,16 +1,17 @@
 /* sw.js — service worker: cache toàn bộ app để chạy offline hoàn toàn */
-const CACHE_NAME = 'thuchi-shop-v7'; // Bump số này ở MỌI lần phát hành để buộc
+const CACHE_NAME = 'thuchi-shop-v8'; // Bump số này ở MỌI lần phát hành để buộc
 // trình duyệt xoá cache cũ và lấy bản mới — nếu quên bump, người dùng đã từng
 // mở app có thể bị kẹt ở bản cũ vĩnh viễn dù đã cập nhật code lên GitHub.
 const ASSETS = [
   './',
   './index.html',
   './manifest.json',
-  './css/style.css?v=11',
-  './js/utils.js?v=11',
-  './js/db.js?v=11',
-  './js/scanner.js?v=11',
-  './js/app.js?v=11',
+  './css/style.css?v=12',
+  './js/utils.js?v=12',
+  './js/db.js?v=12',
+  './js/cloud.js?v=12',
+  './js/scanner.js?v=12',
+  './js/app.js?v=12',
   './vendor/html5-qrcode.min.js',
   './vendor/xlsx.full.min.js',
   './icons/icon-192.png',
@@ -39,6 +40,13 @@ function isHtmlRequest(request) {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+
+  // Chỉ can thiệp các request CÙNG GỐC với app (index.html, css/js, ảnh...).
+  // Request sang nơi khác (VD: api.github.com khi đồng bộ dữ liệu) để mặc
+  // định đi thẳng ra mạng — không được rơi vào các nhánh cache/fallback bên
+  // dưới, nếu không lỗi mạng thật (mất mạng, token sai...) sẽ bị che mất bởi
+  // fallback trả về index.html, khiến app hiểu nhầm là nhận được dữ liệu.
+  if (new URL(event.request.url).origin !== self.location.origin) return;
 
   // Trang HTML (index.html / điều hướng): luôn ưu tiên lấy bản MỚI NHẤT từ
   // mạng trước, chỉ dùng bản đã lưu khi mất mạng. Nhờ vậy mọi bản cập nhật đưa
