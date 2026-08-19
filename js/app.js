@@ -1467,6 +1467,11 @@ function renderSettings(app) {
       <button class="btn btn-primary" data-action="save-shop-info">Lưu thông tin cửa hàng</button>
     </div>
     <div class="settings-item">
+      <h3>🗂️ Nhập từ file quản lý IMEI (nhiều sheet)</h3>
+      <p>Dành cho file Excel kiểu quản lý theo từng máy/IMEI, có nhiều sheet theo tháng (VD: JAN2026, FEB2026...) với các cột <b>IMEI, Product_Name, Model, Status, Giá nhập, Giá bán, Ngày nhập, Ngày bán, Notes</b>. App sẽ tự quét tất cả sheet có đúng cột này (bỏ qua các sheet khác như LISTS/HELP), mỗi dòng là 1 máy: dòng có Status = <b>SOLD</b> sẽ tạo cả lượt nhập lẫn lượt bán, các trạng thái khác (IN_STOCK, WARRANTY, RETURNED, UNDER_REPAIR, LOST...) chỉ tạo lượt nhập (vẫn tính vào tồn kho) kèm ghi chú trạng thái gốc. Nhập lại file đã nhập trước đó sẽ tự bỏ qua các dòng trùng, không tạo dữ liệu đôi.</p>
+      ${importRowHtml('imeifile', '🗂️ File quản lý IMEI (.xlsx nhiều sheet)')}
+    </div>
+    <div class="settings-item">
       <h3>📥 Nhập dữ liệu từ Excel</h3>
       <p>Nhập nhanh dữ liệu có sẵn từ file Excel (.xlsx) hoặc CSV thay vì gõ tay từng dòng. Tải file mẫu trước để điền đúng cột — dòng nào thiếu thông tin bắt buộc sẽ bị bỏ qua và báo lại sau khi nhập.</p>
       ${importRowHtml('items', '📦 Danh sách mặt hàng')}
@@ -1570,7 +1575,7 @@ function doClearAll() {
 // ---------------------------------------------------------------------
 // NHẬP DỮ LIỆU TỪ EXCEL (.xlsx / .xls / .csv) — dùng thư viện SheetJS (XLSX)
 // ---------------------------------------------------------------------
-const IMPORT_TYPES = ['items', 'customers', 'purchases', 'sales'];
+const IMPORT_TYPES = ['items', 'customers', 'purchases', 'sales', 'imeifile'];
 
 const IMPORT_ALIASES = {
   itemName: ['Tên mặt hàng', 'Tên mặt hàng*', 'Tên', 'Mặt hàng'],
@@ -1588,6 +1593,20 @@ const IMPORT_ALIASES = {
   imei: ['IMEI', 'IMEI/Seri', 'IMEI/Seri (cách nhau bởi dấu phẩy)', 'Số seri'],
 };
 
+// Cột của file quản lý theo từng máy/IMEI (nhiều sheet theo tháng) — khớp với
+// kiểu file phổ biến dùng để quản lý điện thoại/điện máy theo từng IMEI.
+const IMEI_FILE_ALIASES = {
+  imei: ['IMEI'],
+  productName: ['Product_Name', 'Tên sản phẩm', 'Tên mặt hàng'],
+  model: ['Model'],
+  status: ['Status', 'Trạng thái'],
+  costPrice: ['Giá nhập'],
+  sellPrice: ['Giá bán'],
+  purchaseDate: ['Ngày nhập'],
+  saleDate: ['Ngày bán'],
+  notes: ['Notes', 'Ghi chú'],
+};
+
 const TEMPLATE_HEADERS = {
   items: ['Tên mặt hàng', 'Danh mục', 'Mã vạch', 'Giá nhập', 'Giá bán', 'Đơn vị', 'Ghi chú'],
   customers: ['Tên khách hàng', 'Số điện thoại', 'Địa chỉ', 'Ghi chú'],
@@ -1596,25 +1615,49 @@ const TEMPLATE_HEADERS = {
     'Ngày (yyyy-mm-dd)', 'Tên mặt hàng', 'Số lượng', 'Giá bán', 'IMEI/Seri',
     'Tên khách hàng', 'Số điện thoại khách', 'Địa chỉ khách', 'Ghi chú',
   ],
+  imeifile: ['IMEI', 'Product_Name', 'Model', 'Status', 'Giá nhập', 'Giá bán', 'Ngày nhập', 'Ngày bán', 'Notes'],
 };
 const TEMPLATE_SAMPLE_ROW = {
   items: ['Tai nghe Bluetooth ABC', 'Khác', '', 150000, 250000, 'cái', ''],
   customers: ['Nguyễn Văn A', '0909123456', '123 Đường ABC, Quận 1', ''],
   purchases: [todayStr(), 'Tai nghe Bluetooth ABC', 5, 150000, '', ''],
   sales: [todayStr(), 'Tai nghe Bluetooth ABC', 1, 250000, '', 'Nguyễn Văn A', '0909123456', '', ''],
+  imeifile: [
+    ['355600000184', 'Redmi Note 13', 'L13-ABC', 'SOLD', 3000000, 4200000, todayStr(), todayStr(), 'Anh Nam - Việt Trì'],
+    ['355600000185', 'Redmi Note 13', 'L13-ABC', 'IN_STOCK', 3000000, '', todayStr(), '', ''],
+  ],
 };
 const TEMPLATE_FILENAMES = {
   items: 'mau-nhap-mat-hang.xlsx',
   customers: 'mau-nhap-khach-hang.xlsx',
   purchases: 'mau-nhap-lich-su-nhap-hang.xlsx',
   sales: 'mau-nhap-lich-su-ban-hang.xlsx',
+  imeifile: 'mau-nhap-file-imei.xlsx',
 };
 
 function downloadExcelTemplate(type) {
-  const ws = XLSX.utils.aoa_to_sheet([TEMPLATE_HEADERS[type], TEMPLATE_SAMPLE_ROW[type]]);
+  const sample = TEMPLATE_SAMPLE_ROW[type];
+  const sampleRows = Array.isArray(sample[0]) ? sample : [sample];
+  const ws = XLSX.utils.aoa_to_sheet([TEMPLATE_HEADERS[type], ...sampleRows]);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Mẫu');
   XLSX.writeFile(wb, TEMPLATE_FILENAMES[type]);
+}
+
+function readExcelWorkbook(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('không đọc được file'));
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target.result);
+        resolve(XLSX.read(data, { type: 'array', cellDates: true }));
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
 }
 
 function readExcelRows(file) {
@@ -1706,16 +1749,20 @@ function findOrCreateCustomerForImport(name, phone, address) {
   return DB.saveCustomer(c);
 }
 
-function showImportResult(title, successCount, errors) {
+function showImportResult(title, successCount, errors, summaryOverride) {
+  const ERROR_DISPLAY_CAP = 100;
+  const shown = errors.slice(0, ERROR_DISPLAY_CAP);
+  const moreCount = errors.length - shown.length;
   const errHtml = errors.length
-    ? `<div class="section-title" style="margin-top:10px">Bỏ qua (${errors.length} dòng)</div>
-       <div style="max-height:220px; overflow-y:auto; font-size:12.5px; color:var(--muted); line-height:1.6">${errors
+    ? `<div class="section-title" style="margin-top:10px">Bỏ qua / cảnh báo (${errors.length} dòng)</div>
+       <div style="max-height:220px; overflow-y:auto; font-size:12.5px; color:var(--muted); line-height:1.6">${shown
          .map((e) => escapeHtml(e))
-         .join('<br/>')}</div>`
+         .join('<br/>')}${moreCount > 0 ? `<br/>... và ${moreCount} dòng khác` : ''}</div>`
     : '';
+  const summaryText = summaryOverride || `Đã nhập thành công <b>${successCount}</b> dòng.`;
   openSheet(`
     <div class="sheet-title">${escapeHtml(title)}</div>
-    <p>Đã nhập thành công <b>${successCount}</b> dòng.${errors.length ? ` Bỏ qua ${errors.length} dòng bị lỗi (xem chi tiết bên dưới).` : ''}</p>
+    <p>${summaryText}${errors.length ? ` Bỏ qua/cảnh báo ${errors.length} dòng (xem chi tiết bên dưới).` : ''}</p>
     ${errHtml}
     <div class="btn-row">
       <button class="btn btn-primary" data-action="close-sheet">Đóng</button>
@@ -1882,11 +1929,118 @@ async function importSalesFromExcel(file) {
   render();
 }
 
+async function importImeiFileFromExcel(file) {
+  let wb;
+  try {
+    wb = await readExcelWorkbook(file);
+  } catch (err) {
+    toast('Không đọc được file: ' + err.message, true);
+    return;
+  }
+
+  let purchaseCount = 0;
+  let saleCount = 0;
+  let dupCount = 0;
+  let matchedSheets = 0;
+  const errors = [];
+
+  wb.SheetNames.forEach((sheetName) => {
+    const ws = wb.Sheets[sheetName];
+    const headerRow = (XLSX.utils.sheet_to_json(ws, { header: 1, range: 0, defval: '' })[0] || []).map(normHeader);
+    const hasImei = IMEI_FILE_ALIASES.imei.some((a) => headerRow.includes(normHeader(a)));
+    const hasProductName = IMEI_FILE_ALIASES.productName.some((a) => headerRow.includes(normHeader(a)));
+    if (!hasImei || !hasProductName) return; // sheet khác định dạng (VD: LISTS, HELP) -> bỏ qua êm
+
+    matchedSheets++;
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: true });
+    rows.forEach((row, idx) => {
+      const rowLabel = `${sheetName} dòng ${idx + 2}`;
+      const productName = fieldText(row, IMEI_FILE_ALIASES.productName);
+      if (!productName) return; // dòng trống (rất nhiều dòng trắng cuối sheet) -> bỏ qua êm, không tính lỗi
+
+      const imei = fieldText(row, IMEI_FILE_ALIASES.imei);
+      const model = fieldText(row, IMEI_FILE_ALIASES.model);
+      const status = fieldText(row, IMEI_FILE_ALIASES.status).toUpperCase();
+      const costPrice = parseMoneyInput(getField(row, IMEI_FILE_ALIASES.costPrice));
+      const sellPrice = parseMoneyInput(getField(row, IMEI_FILE_ALIASES.sellPrice));
+      const purchaseDate = parseImportDate(getField(row, IMEI_FILE_ALIASES.purchaseDate));
+      const saleDate = parseImportDate(getField(row, IMEI_FILE_ALIASES.saleDate));
+      const notes = fieldText(row, IMEI_FILE_ALIASES.notes);
+
+      const item = findOrCreateItemForImport(productName, '');
+      if (model && !item.note) DB.saveItem({ ...item, note: `Model: ${model}` });
+
+      if (!purchaseDate) {
+        errors.push(`${rowLabel}: thiếu/sai Ngày nhập, bỏ qua dòng này`);
+        return;
+      }
+
+      const existingPurchase = DB.getPurchases().find(
+        (p) => p.itemId === item.id && p.date === purchaseDate && (imei ? p.imei === imei : p.costPrice === costPrice)
+      );
+      if (existingPurchase) {
+        dupCount++;
+      } else {
+        DB.savePurchase({
+          id: null,
+          itemId: item.id,
+          date: purchaseDate,
+          quantity: 1,
+          costPrice,
+          imei,
+          note: status && status !== 'SOLD' ? `[${status}]${notes ? ' ' + notes : ''}` : '',
+        });
+        purchaseCount++;
+      }
+
+      if (status === 'SOLD' && saleDate) {
+        const existingSale = DB.getSales().find(
+          (s) => s.itemId === item.id && s.date === saleDate && (imei ? s.imei === imei : s.sellPrice === sellPrice)
+        );
+        if (existingSale) {
+          dupCount++;
+        } else {
+          const cust = notes ? findOrCreateCustomerForImport(notes, '', '') : null;
+          DB.saveSale({
+            id: null,
+            itemId: item.id,
+            customerId: cust ? cust.id : null,
+            date: saleDate,
+            quantity: 1,
+            sellPrice,
+            costPriceAtSale: costPrice,
+            imei,
+            customerName: notes,
+            customerPhone: '',
+            customerAddress: '',
+            note: '',
+          });
+          saleCount++;
+        }
+      } else if (status === 'SOLD' && !saleDate) {
+        errors.push(`${rowLabel}: Status=SOLD nhưng thiếu/sai Ngày bán -> chỉ nhập lượt nhập hàng, bỏ qua lượt bán`);
+      }
+    });
+  });
+
+  if (matchedSheets === 0) {
+    toast('Không tìm thấy sheet nào đúng định dạng (cần có cột IMEI và Product_Name)', true);
+    return;
+  }
+
+  const summary = `Đã quét <b>${matchedSheets}</b> sheet dữ liệu · <b>${purchaseCount}</b> lượt nhập hàng · <b>${saleCount}</b> lượt bán hàng${
+    dupCount ? ` · bỏ qua <b>${dupCount}</b> dòng đã có sẵn (trùng với dữ liệu đã nhập trước đó)` : ''
+  }.`;
+  showImportResult('Nhập từ file quản lý IMEI', purchaseCount + saleCount, errors, summary);
+  render();
+}
+
 const EXCEL_IMPORTERS = {
   items: importItemsFromExcel,
   customers: importCustomersFromExcel,
   purchases: importPurchasesFromExcel,
   sales: importSalesFromExcel,
+  imeifile: importImeiFileFromExcel,
 };
 
 // ---------------------------------------------------------------------
@@ -1897,7 +2051,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=4').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=5').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
