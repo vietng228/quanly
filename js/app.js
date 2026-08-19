@@ -942,12 +942,12 @@ function renderPurchases(app) {
             <div class="li-sub">${formatDateVN(p.date)} · SL ${p.quantity} × ${formatMoney(p.costPrice)}${p.note ? ' · ' + escapeHtml(p.note) : ''}</div>
             ${p.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(p.imei)}</div>` : ''}
           </div>
-          <div class="li-main" style="flex:0">
+          <div class="li-right">
             <div class="li-amount">${formatMoney(p.costPrice * p.quantity)}</div>
-          </div>
-          <div class="li-actions">
-            <button class="icon-btn" data-action="edit-purchase" data-id="${p.id}">✏️</button>
-            <button class="icon-btn" data-action="delete-purchase" data-id="${p.id}">🗑️</button>
+            <div class="li-actions">
+              <button class="icon-btn" data-action="edit-purchase" data-id="${p.id}">✏️</button>
+              <button class="icon-btn" data-action="delete-purchase" data-id="${p.id}">🗑️</button>
+            </div>
           </div>
         </div>`;
           })
@@ -1130,13 +1130,13 @@ function renderSales(app) {
             <div class="li-sub">👤 ${escapeHtml(s.customerName || 'Khách lẻ')}${s.customerPhone ? ' · ' + escapeHtml(s.customerPhone) : ''}${s.customerAddress ? ' · ' + escapeHtml(s.customerAddress) : ''}</div>
             ${s.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(s.imei)}</div>` : ''}
           </div>
-          <div class="li-main" style="flex:0">
+          <div class="li-right">
             <div class="li-amount">${formatMoney(s.sellPrice * s.quantity)}</div>
-          </div>
-          <div class="li-actions">
-            <button class="icon-btn" data-action="print-invoice" data-id="${s.id}">🖨️</button>
-            <button class="icon-btn" data-action="edit-sale" data-id="${s.id}">✏️</button>
-            <button class="icon-btn" data-action="delete-sale" data-id="${s.id}">🗑️</button>
+            <div class="li-actions">
+              <button class="icon-btn" data-action="print-invoice" data-id="${s.id}">🖨️</button>
+              <button class="icon-btn" data-action="edit-sale" data-id="${s.id}">✏️</button>
+              <button class="icon-btn" data-action="delete-sale" data-id="${s.id}">🗑️</button>
+            </div>
           </div>
         </div>`;
           })
@@ -1530,12 +1530,12 @@ function renderCashflow(app) {
           <div class="li-title">${escapeHtml(t.category || (t.type === 'thu' ? 'Khoản thu' : 'Khoản chi'))} <span class="badge ${t.type}">${t.type === 'thu' ? 'Thu' : 'Chi'}</span></div>
           <div class="li-sub">${formatDateVN(t.date)}${t.note ? ' · ' + escapeHtml(t.note) : ''}</div>
         </div>
-        <div class="li-main" style="flex:0">
+        <div class="li-right">
           <div class="li-amount ${t.type === 'thu' ? 'pos' : 'neg'}">${t.type === 'thu' ? '+' : '-'}${formatMoney(t.amount)}</div>
-        </div>
-        <div class="li-actions">
-          <button class="icon-btn" data-action="edit-transaction" data-id="${t.id}">✏️</button>
-          <button class="icon-btn" data-action="delete-transaction" data-id="${t.id}">🗑️</button>
+          <div class="li-actions">
+            <button class="icon-btn" data-action="edit-transaction" data-id="${t.id}">✏️</button>
+            <button class="icon-btn" data-action="delete-transaction" data-id="${t.id}">🗑️</button>
+          </div>
         </div>
       </div>`
           )
@@ -2279,7 +2279,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=9').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=10').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
