@@ -25,6 +25,22 @@ function categoryIcon(cat) {
   return CATEGORY_ICONS[cat] || CATEGORY_ICONS['Khác'];
 }
 
+// Các khổ giấy in hoá đơn — 57mm/58mm/80mm là khổ giấy cuộn máy in nhiệt
+// (bill/receipt) tiêu chuẩn phổ biến ở VN, KHÁC với A4/A5 (giấy tờ rời khổ
+// văn phòng). Khai báo `size` trong CSS @page theo đúng khổ đã chọn để hộp
+// thoại in của trình duyệt tự nhận đúng kích thước cuộn giấy, không phải tự
+// chọn tay trong danh sách A4/A5/A6/Letter mặc định của hệ điều hành nữa.
+const PRINT_PAPER_SIZES = [
+  { value: '57mm', label: '57mm (giấy nhiệt cuộn nhỏ, máy in mini)', widthMm: 57, fontScale: 0.9 },
+  { value: '58mm', label: '58mm (giấy nhiệt phổ biến nhất)', widthMm: 58, fontScale: 0.9 },
+  { value: '80mm', label: '80mm — khổ K80 (giấy nhiệt khổ lớn)', widthMm: 80, fontScale: 1 },
+  { value: 'A5', label: 'A5 (giấy thường, in máy in thường)', widthMm: 148, fontScale: 1.15 },
+  { value: 'A4', label: 'A4 (giấy thường, in máy in thường)', widthMm: 210, fontScale: 1.25 },
+];
+function getPrintPaperSize(value) {
+  return PRINT_PAPER_SIZES.find((p) => p.value === value) || PRINT_PAPER_SIZES.find((p) => p.value === '80mm');
+}
+
 // Danh sách ngân hàng & mã BIN theo chuẩn VietQR/NAPAS 247 (nguồn: api.vietqr.io)
 // — dùng để tự tạo mã QR chuyển khoản ngay trên máy, không cần gọi API ngoài.
 const VIETQR_BANKS = [
@@ -352,6 +368,7 @@ function onAppClick(e) {
         bankAccountNo: document.getElementById('f-shop-bank-account').value.trim(),
         bankAccountName: document.getElementById('f-shop-bank-holder').value.trim(),
         qrDynamicAmount: document.getElementById('f-shop-qr-dynamic').checked,
+        printPaperSize: document.getElementById('f-shop-print-size').value,
       });
       toast('Đã lưu thông tin cửa hàng');
     },
@@ -2292,7 +2309,19 @@ function printInvoice(sale) {
   const changeAmount = hasCashInfo ? Math.max(0, sale.cashGiven - total) : 0;
   const invoiceQr = resolveInvoiceQr(shop, sale, total);
   const invoiceNo = sale.invoiceNo || ('HD' + String(DB.getSales().findIndex((x) => x.id === sale.id) + 1).padStart(6, '0'));
-  const win = window.open('', '_blank', 'width=380,height=600');
+
+  // Khổ giấy in — lấy theo lựa chọn đã lưu ở Cài đặt (mặc định 80mm nếu chưa
+  // chọn), tự tính @page size + độ rộng nội dung + tỉ lệ cỡ chữ tương ứng để
+  // hộp thoại in nhận đúng khổ giấy nhiệt (57/58/80mm) thay vì chỉ hiện các
+  // khổ giấy văn phòng A4/A5/A6 mặc định của trình duyệt.
+  const paper = getPrintPaperSize(shop.printPaperSize);
+  const isThermal = paper.value.endsWith('mm');
+  const pageSizeCss = isThermal ? `${paper.widthMm}mm auto` : paper.value;
+  const pageMarginCss = isThermal ? '3mm' : paper.value === 'A4' ? '14mm' : '10mm';
+  const bodyWidthCss = isThermal ? `${paper.widthMm - 4}mm` : paper.value === 'A4' ? '182mm' : '128mm';
+  const fs = paper.fontScale;
+  const popupWidth = isThermal ? 380 : 500;
+  const win = window.open('', '_blank', `width=${popupWidth},height=650`);
   if (!win) {
     toast('Trình duyệt đang chặn cửa sổ in. Hãy cho phép popup rồi bấm in lại.', true);
     return;
@@ -2301,27 +2330,27 @@ function printInvoice(sale) {
 <html lang="vi"><head><meta charset="UTF-8" />
 <title>Hoá đơn bán hàng</title>
 <style>
-  @page { margin: 4mm; }
+  @page { size: ${pageSizeCss}; margin: ${pageMarginCss}; }
   * { box-sizing: border-box; }
-  body { font-family: Arial, Helvetica, 'Segoe UI', sans-serif; width: 78mm; margin: 0 auto; padding: 6px; font-size: 13.5px; line-height: 1.45; color: #000; }
+  body { font-family: Arial, Helvetica, 'Segoe UI', sans-serif; width: ${bodyWidthCss}; margin: 0 auto; padding: 6px; font-size: ${(13.5 * fs).toFixed(1)}px; line-height: 1.45; color: #000; }
   .center { text-align: center; }
-  .shop-name { font-size: 19px; font-weight: bold; }
+  .shop-name { font-size: ${(19 * fs).toFixed(1)}px; font-weight: bold; }
   hr { border: none; border-top: 1px dashed #000; margin: 8px 0; }
-  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  table { width: 100%; border-collapse: collapse; font-size: ${(13.5 * fs).toFixed(1)}px; }
   td, th { padding: 3px 0; vertical-align: top; text-align: left; }
-  th { font-weight: bold; font-size: 12.5px; border-bottom: 1px solid #000; }
+  th { font-weight: bold; font-size: ${(12.5 * fs).toFixed(1)}px; border-bottom: 1px solid #000; }
   .right, td.right, th.right { text-align: right; }
   .cc { text-align: center; }
-  .invoice-title { font-weight: bold; text-align: center; margin: 10px 0 2px; letter-spacing: 1px; font-size: 16px; }
+  .invoice-title { font-weight: bold; text-align: center; margin: 10px 0 2px; letter-spacing: 1px; font-size: ${(16 * fs).toFixed(1)}px; }
   .section-gap { margin-top: 10px; }
   .customer-block div { margin-bottom: 2px; }
   .summary-block { width: 88%; margin: 10px auto 0; }
   .summary-block .row-line { margin-bottom: 2px; }
-  .summary-block .row-line.grand { font-weight: bold; font-size: 15px; margin-top: 4px; }
-  .footer { text-align: center; margin-top: 14px; font-size: 13px; font-style: italic; }
+  .summary-block .row-line.grand { font-weight: bold; font-size: ${(15 * fs).toFixed(1)}px; margin-top: 4px; }
+  .footer { text-align: center; margin-top: 14px; font-size: ${(13 * fs).toFixed(1)}px; font-style: italic; }
   .row-line { display: flex; justify-content: space-between; gap: 8px; }
-  .amount-words { text-align: center; font-style: italic; margin: 10px 0; font-size: 13px; }
-  .warranty-box { font-size: 12.5px; line-height: 1.6; margin-top: 14px; }
+  .amount-words { text-align: center; font-style: italic; margin: 10px 0; font-size: ${(13 * fs).toFixed(1)}px; }
+  .warranty-box { font-size: ${(12.5 * fs).toFixed(1)}px; line-height: 1.6; margin-top: 14px; }
   .warranty-box p { margin: 6px 0; }
   .qr-box img { border: 1px solid #ccc; border-radius: 6px; }
 </style>
@@ -2779,6 +2808,13 @@ function renderSettings(app) {
       <div class="form-group">
         <label>Thông tin bảo hành (in ở cuối hoá đơn)</label>
         <textarea id="f-shop-warranty" rows="3" placeholder="VD: Bảo hành 12 tháng lỗi phần cứng NSX. Không áp dụng với cháy nổ, vào nước, rơi vỡ, tự ý sửa chữa...">${escapeHtml(shop.warranty || '')}</textarea>
+      </div>
+      <div class="form-group">
+        <label>🖨️ Khổ giấy in hoá đơn</label>
+        <p class="help-text" style="margin-bottom:8px">Chọn đúng khổ giấy của máy in để hộp thoại in tự nhận đúng kích thước, không phải tự chọn A4/A5/A6 mỗi lần in nữa.</p>
+        <select id="f-shop-print-size">
+          ${PRINT_PAPER_SIZES.map((p) => `<option value="${p.value}" ${(shop.printPaperSize || '80mm') === p.value ? 'selected' : ''}>${escapeHtml(p.label)}</option>`).join('')}
+        </select>
       </div>
       <div class="form-group">
         <label>🏦 Tự tạo mã QR chuyển khoản theo số tài khoản</label>
@@ -3583,7 +3619,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=22').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=23').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
