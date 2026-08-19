@@ -462,11 +462,6 @@ function renderItems(app) {
     })
     .join('');
 
-  let items = allItems.filter((i) => !state.itemSearch || i.name.toLowerCase().includes(state.itemSearch.toLowerCase()));
-  if (state.itemCategoryFilter !== 'all') {
-    items = items.filter((i) => (i.category || 'Khác') === state.itemCategoryFilter);
-  }
-
   app.innerHTML = `
     ${backToMoreLink()}
     <input type="text" class="searchbox" id="item-search" placeholder="🔍 Tìm mặt hàng..." value="${escapeHtml(state.itemSearch)}" />
@@ -474,43 +469,57 @@ function renderItems(app) {
     <div id="items-list"></div>
     <button class="fab" data-action="add-item">+</button>
   `;
-  const listEl = document.getElementById('items-list');
-  if (items.length === 0) {
-    listEl.innerHTML = `<div class="empty-state">Chưa có mặt hàng nào phù hợp.<br/>Bấm nút + để thêm mặt hàng.</div>`;
-  } else {
-    const groups = {};
-    items.forEach((i) => {
-      const cat = i.category || 'Khác';
-      groups[cat] = groups[cat] || [];
-      groups[cat].push(i);
-    });
-    const sortedCats = Object.keys(groups).sort((a, b) => a.localeCompare(b, 'vi'));
-    listEl.innerHTML = sortedCats
-      .map(
-        (cat) => `
-      <div class="section-title">${categoryIcon(cat)} ${escapeHtml(cat)} (${groups[cat].length})</div>
-      ${groups[cat]
+
+  // Chỉ cập nhật danh sách kết quả khi gõ tìm kiếm, KHÔNG render lại toàn bộ
+  // app.innerHTML — nếu không, ô input bị tạo lại mới mỗi lần gõ, làm mất
+  // focus/tắt bàn phím trên điện thoại sau mỗi ký tự.
+  function updateItemsList() {
+    let items = allItems.filter((i) => !state.itemSearch || i.name.toLowerCase().includes(state.itemSearch.toLowerCase()));
+    if (state.itemCategoryFilter !== 'all') {
+      items = items.filter((i) => (i.category || 'Khác') === state.itemCategoryFilter);
+    }
+    const listEl = document.getElementById('items-list');
+    if (!listEl) return;
+    if (items.length === 0) {
+      listEl.innerHTML = `<div class="empty-state">Chưa có mặt hàng nào phù hợp.<br/>Bấm nút + để thêm mặt hàng.</div>`;
+    } else {
+      const groups = {};
+      items.forEach((i) => {
+        const cat = i.category || 'Khác';
+        groups[cat] = groups[cat] || [];
+        groups[cat].push(i);
+      });
+      const sortedCats = Object.keys(groups).sort((a, b) => a.localeCompare(b, 'vi'));
+      listEl.innerHTML = sortedCats
         .map(
-          (i) => `
-        <div class="list-item">
-          <div class="item-icon">${categoryIcon(i.category)}</div>
-          <div class="li-main">
-            <div class="li-title">${escapeHtml(i.name)}</div>
-            <div class="li-sub">Nhập ${formatMoney(i.defaultCostPrice)} · Bán ${formatMoney(i.defaultSellPrice)}${i.barcode ? ' · #' + escapeHtml(i.barcode) : ''}</div>
-          </div>
-          <div class="li-actions">
-            <button class="icon-btn" data-action="edit-item" data-id="${i.id}">✏️</button>
-            <button class="icon-btn" data-action="delete-item" data-id="${i.id}">🗑️</button>
-          </div>
-        </div>`
+          (cat) => `
+        <div class="section-title">${categoryIcon(cat)} ${escapeHtml(cat)} (${groups[cat].length})</div>
+        ${groups[cat]
+          .map(
+            (i) => `
+          <div class="list-item">
+            <div class="item-icon">${categoryIcon(i.category)}</div>
+            <div class="li-main">
+              <div class="li-title">${escapeHtml(i.name)}</div>
+              <div class="li-sub">Nhập ${formatMoney(i.defaultCostPrice)} · Bán ${formatMoney(i.defaultSellPrice)}${i.barcode ? ' · #' + escapeHtml(i.barcode) : ''}</div>
+            </div>
+            <div class="li-actions">
+              <button class="icon-btn" data-action="edit-item" data-id="${i.id}">✏️</button>
+              <button class="icon-btn" data-action="delete-item" data-id="${i.id}">🗑️</button>
+            </div>
+          </div>`
+          )
+          .join('')}`
         )
-        .join('')}`
-      )
-      .join('');
+        .join('');
+    }
   }
+
+  updateItemsList();
+
   document.getElementById('item-search').addEventListener('input', (e) => {
     state.itemSearch = e.target.value;
-    renderItems(app);
+    updateItemsList();
   });
 }
 
@@ -538,8 +547,6 @@ function computeInventory() {
 
 function renderInventory(app) {
   const all = computeInventory();
-  const q = (state.inventorySearch || '').toLowerCase();
-  const inv = all.filter((x) => !q || x.item.name.toLowerCase().includes(q));
   const outCount = all.filter((x) => x.stock <= 0).length;
   const lowCount = all.filter((x) => x.stock > 0 && x.stock <= LOW_STOCK_THRESHOLD).length;
 
@@ -558,48 +565,59 @@ function renderInventory(app) {
     </div>
     <div id="inventory-list"></div>
   `;
-  const listEl = document.getElementById('inventory-list');
-  if (inv.length === 0) {
-    listEl.innerHTML = `<div class="empty-state">Không có mặt hàng nào phù hợp.</div>`;
-  } else {
-    const groups = {};
-    inv.forEach((x) => {
-      const cat = x.item.category || 'Khác';
-      groups[cat] = groups[cat] || [];
-      groups[cat].push(x);
-    });
-    const sortedCats = Object.keys(groups).sort((a, b) => a.localeCompare(b, 'vi'));
-    listEl.innerHTML = sortedCats
-      .map(
-        (cat) => `
-      <div class="section-title">${categoryIcon(cat)} ${escapeHtml(cat)}</div>
-      ${groups[cat]
-        .map((x) => {
-          const badge =
-            x.stock <= 0
-              ? '<span class="badge chi">Hết hàng</span>'
-              : x.stock <= LOW_STOCK_THRESHOLD
-              ? '<span class="badge nhap">Sắp hết</span>'
-              : '';
-          return `
-        <div class="list-item">
-          <div class="item-icon">${categoryIcon(x.item.category)}</div>
-          <div class="li-main">
-            <div class="li-title">${escapeHtml(x.item.name)} ${badge}</div>
-            <div class="li-sub">Đã nhập ${x.purchased} · Đã bán ${x.sold}</div>
-          </div>
-          <div class="li-main" style="flex:0">
-            <div class="li-amount ${x.stock <= 0 ? 'neg' : ''}">${x.stock} ${escapeHtml(x.item.unit || '')}</div>
-          </div>
-        </div>`;
-        })
-        .join('')}`
-      )
-      .join('');
+
+  // Chỉ cập nhật danh sách kết quả khi gõ tìm kiếm, KHÔNG render lại toàn bộ
+  // app.innerHTML — tránh tạo lại ô input mỗi lần gõ (mất focus/tắt bàn phím).
+  function updateInventoryList() {
+    const q = (state.inventorySearch || '').toLowerCase();
+    const inv = all.filter((x) => !q || x.item.name.toLowerCase().includes(q));
+    const listEl = document.getElementById('inventory-list');
+    if (!listEl) return;
+    if (inv.length === 0) {
+      listEl.innerHTML = `<div class="empty-state">Không có mặt hàng nào phù hợp.</div>`;
+    } else {
+      const groups = {};
+      inv.forEach((x) => {
+        const cat = x.item.category || 'Khác';
+        groups[cat] = groups[cat] || [];
+        groups[cat].push(x);
+      });
+      const sortedCats = Object.keys(groups).sort((a, b) => a.localeCompare(b, 'vi'));
+      listEl.innerHTML = sortedCats
+        .map(
+          (cat) => `
+        <div class="section-title">${categoryIcon(cat)} ${escapeHtml(cat)}</div>
+        ${groups[cat]
+          .map((x) => {
+            const badge =
+              x.stock <= 0
+                ? '<span class="badge chi">Hết hàng</span>'
+                : x.stock <= LOW_STOCK_THRESHOLD
+                ? '<span class="badge nhap">Sắp hết</span>'
+                : '';
+            return `
+          <div class="list-item">
+            <div class="item-icon">${categoryIcon(x.item.category)}</div>
+            <div class="li-main">
+              <div class="li-title">${escapeHtml(x.item.name)} ${badge}</div>
+              <div class="li-sub">Đã nhập ${x.purchased} · Đã bán ${x.sold}</div>
+            </div>
+            <div class="li-main" style="flex:0">
+              <div class="li-amount ${x.stock <= 0 ? 'neg' : ''}">${x.stock} ${escapeHtml(x.item.unit || '')}</div>
+            </div>
+          </div>`;
+          })
+          .join('')}`
+        )
+        .join('');
+    }
   }
+
+  updateInventoryList();
+
   document.getElementById('inventory-search').addEventListener('input', (e) => {
     state.inventorySearch = e.target.value;
-    renderInventory(app);
+    updateInventoryList();
   });
 }
 
@@ -608,33 +626,37 @@ function renderInventory(app) {
 // ---------------------------------------------------------------------
 function renderLookup(app) {
   const raw = state.lookupQuery || '';
-  const q = raw.trim().toLowerCase();
 
   app.innerHTML = `
     ${backToMoreLink()}
     <input type="text" class="searchbox" id="lookup-search" placeholder="🔍 Nhập IMEI/số seri máy hoặc SĐT khách..." value="${escapeHtml(raw)}" />
     <div id="lookup-results"></div>
   `;
-  const resultsEl = document.getElementById('lookup-results');
 
-  if (!q) {
-    resultsEl.innerHTML = `<div class="empty-state">Nhập số IMEI/seri máy hoặc số điện thoại khách hàng để tra cứu nhanh lịch sử nhập/bán liên quan.</div>`;
-    document.getElementById('lookup-search').addEventListener('input', (e) => {
-      state.lookupQuery = e.target.value;
-      renderLookup(app);
-    });
-    return;
-  }
+  // Chỉ cập nhật phần kết quả khi gõ tìm kiếm, KHÔNG render lại toàn bộ
+  // app.innerHTML — nếu không, ô input bị tạo lại mới mỗi lần gõ khiến mất
+  // focus và tự tắt bàn phím trên điện thoại chỉ sau 1 ký tự.
+  function updateLookupResults() {
+    const q = (state.lookupQuery || '').trim().toLowerCase();
+    const resultsEl = document.getElementById('lookup-results');
+    if (!resultsEl) return;
 
-  const sales = DB.getSales().filter(
-    (s) => (s.imei || '').toLowerCase().includes(q) || (s.customerPhone || '').toLowerCase().includes(q)
-  );
-  const purchases = DB.getPurchases().filter((p) => (p.imei || '').toLowerCase().includes(q));
-  const customers = DB.getCustomers().filter((c) => (c.phone || '').toLowerCase().includes(q));
+    if (!q) {
+      resultsEl.innerHTML = `<div class="empty-state">Nhập số IMEI/seri máy hoặc số điện thoại khách hàng để tra cứu nhanh lịch sử nhập/bán liên quan.</div>`;
+      return;
+    }
 
-  if (sales.length === 0 && purchases.length === 0 && customers.length === 0) {
-    resultsEl.innerHTML = `<div class="empty-state">Không tìm thấy kết quả nào phù hợp với "${escapeHtml(raw)}".</div>`;
-  } else {
+    const sales = DB.getSales().filter(
+      (s) => (s.imei || '').toLowerCase().includes(q) || (s.customerPhone || '').toLowerCase().includes(q)
+    );
+    const purchases = DB.getPurchases().filter((p) => (p.imei || '').toLowerCase().includes(q));
+    const customers = DB.getCustomers().filter((c) => (c.phone || '').toLowerCase().includes(q));
+
+    if (sales.length === 0 && purchases.length === 0 && customers.length === 0) {
+      resultsEl.innerHTML = `<div class="empty-state">Không tìm thấy kết quả nào phù hợp với "${escapeHtml(state.lookupQuery || '')}".</div>`;
+      return;
+    }
+
     let html = '';
     if (customers.length) {
       html += `<div class="section-title">👤 Khách hàng (${customers.length})</div>`;
@@ -690,9 +712,12 @@ function renderLookup(app) {
     }
     resultsEl.innerHTML = html;
   }
+
+  updateLookupResults();
+
   document.getElementById('lookup-search').addEventListener('input', (e) => {
     state.lookupQuery = e.target.value;
-    renderLookup(app);
+    updateLookupResults();
   });
 }
 
@@ -924,10 +949,36 @@ function openPurchaseForm(p) {
   });
 }
 
+// Tìm các IMEI/số seri đã tồn tại ở lần nhập hàng khác trong hệ thống (không
+// tính chính bản ghi đang sửa) — dùng để cảnh báo tránh nhập trùng máy.
+function findDuplicateImeis(imeiList, excludeId) {
+  if (!imeiList.length) return [];
+  const existing = new Set();
+  DB.getPurchases().forEach((pu) => {
+    if (excludeId && pu.id === excludeId) return;
+    (pu.imei || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .forEach((im) => existing.add(im.toLowerCase()));
+  });
+  return imeiList.filter((im) => existing.has(im.toLowerCase()));
+}
+
 function submitPurchaseForm() {
   if (!formDraft.itemId) { toast('Vui lòng chọn mặt hàng', true); return; }
   syncImeiLinesFromDom();
-  const imei = formDraft.imeiLines.map((s) => (s || '').trim()).filter(Boolean).join(', ');
+  const imeiList = formDraft.imeiLines.map((s) => (s || '').trim()).filter(Boolean);
+  const imei = imeiList.join(', ');
+
+  const dupImeis = findDuplicateImeis(imeiList, formDraft.editId);
+  if (dupImeis.length) {
+    const ok = confirmDialog(
+      `⚠️ IMEI/số seri sau đã tồn tại trong hệ thống (đã từng nhập trước đó):\n${dupImeis.join(', ')}\n\nBạn có chắc muốn lưu lần nhập này không?`
+    );
+    if (!ok) return;
+  }
+
   const p = {
     id: formDraft.editId,
     itemId: formDraft.itemId,
@@ -1109,16 +1160,16 @@ function printInvoice(sale) {
 <style>
   @page { margin: 4mm; }
   * { box-sizing: border-box; }
-  body { font-family: 'Courier New', Courier, monospace; width: 78mm; margin: 0 auto; padding: 6px; font-size: 12.5px; color: #000; }
+  body { font-family: Arial, Helvetica, 'Segoe UI', sans-serif; width: 78mm; margin: 0 auto; padding: 6px; font-size: 14px; line-height: 1.4; color: #000; }
   .center { text-align: center; }
-  .shop-name { font-size: 15px; font-weight: bold; }
+  .shop-name { font-size: 17px; font-weight: bold; }
   hr { border: none; border-top: 1px dashed #000; margin: 8px 0; }
-  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  td { padding: 2px 0; vertical-align: top; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td { padding: 3px 0; vertical-align: top; }
   .right { text-align: right; }
-  .title-row { font-weight: bold; text-align: center; margin: 4px 0; letter-spacing: 1px; }
-  .total-row td { font-weight: bold; font-size: 14.5px; padding-top: 6px; }
-  .footer { text-align: center; margin-top: 10px; font-size: 11.5px; }
+  .title-row { font-weight: bold; text-align: center; margin: 4px 0; letter-spacing: 1px; font-size: 15px; }
+  .total-row td { font-weight: bold; font-size: 16.5px; padding-top: 6px; }
+  .footer { text-align: center; margin-top: 10px; font-size: 13px; }
   .row-line { display: flex; justify-content: space-between; gap: 8px; }
 </style>
 </head>
@@ -1166,42 +1217,51 @@ function printInvoice(sale) {
 // CUSTOMERS (Khách hàng)
 // ---------------------------------------------------------------------
 function renderCustomers(app) {
-  const customers = DB.getCustomers().filter(
-    (c) => !state.customerSearch || c.name.toLowerCase().includes(state.customerSearch.toLowerCase()) || (c.phone || '').includes(state.customerSearch)
-  );
   app.innerHTML = `
     <input type="text" class="searchbox" id="customer-search" placeholder="🔍 Tìm khách hàng (tên/sđt)..." value="${escapeHtml(state.customerSearch)}" />
     <button class="btn btn-secondary" data-action="share-customers" style="margin-bottom:12px">📤 Chia sẻ danh sách qua Gmail...</button>
     <div id="customers-list"></div>
     <button class="fab" data-action="add-customer">+</button>
   `;
-  const listEl = document.getElementById('customers-list');
-  if (customers.length === 0) {
-    listEl.innerHTML = `<div class="empty-state">Chưa có khách hàng nào.<br/>Bấm nút + để thêm khách hàng.</div>`;
-  } else {
-    const allSales = DB.getSales();
-    listEl.innerHTML = customers
-      .map((c) => {
-        const sales = allSales.filter((s) => s.customerId === c.id);
-        const totalSpent = sales.reduce((sum, s) => sum + s.sellPrice * s.quantity, 0);
-        return `
-      <div class="list-item">
-        <div class="li-main">
-          <div class="li-title">${escapeHtml(c.name)}</div>
-          <div class="li-sub">${escapeHtml(c.phone || '')}${c.address ? ' · ' + escapeHtml(c.address) : ''}</div>
-          <div class="li-sub">${sales.length} đơn đã mua · Tổng ${formatMoney(totalSpent)}</div>
-        </div>
-        <div class="li-actions">
-          <button class="icon-btn" data-action="edit-customer" data-id="${c.id}">✏️</button>
-          <button class="icon-btn" data-action="delete-customer" data-id="${c.id}">🗑️</button>
-        </div>
-      </div>`;
-      })
-      .join('');
+
+  // Chỉ cập nhật danh sách kết quả khi gõ tìm kiếm, KHÔNG render lại toàn bộ
+  // app.innerHTML — tránh tạo lại ô input mỗi lần gõ (mất focus/tắt bàn phím).
+  function updateCustomersList() {
+    const customers = DB.getCustomers().filter(
+      (c) => !state.customerSearch || c.name.toLowerCase().includes(state.customerSearch.toLowerCase()) || (c.phone || '').includes(state.customerSearch)
+    );
+    const listEl = document.getElementById('customers-list');
+    if (!listEl) return;
+    if (customers.length === 0) {
+      listEl.innerHTML = `<div class="empty-state">Chưa có khách hàng nào.<br/>Bấm nút + để thêm khách hàng.</div>`;
+    } else {
+      const allSales = DB.getSales();
+      listEl.innerHTML = customers
+        .map((c) => {
+          const sales = allSales.filter((s) => s.customerId === c.id);
+          const totalSpent = sales.reduce((sum, s) => sum + s.sellPrice * s.quantity, 0);
+          return `
+        <div class="list-item">
+          <div class="li-main">
+            <div class="li-title">${escapeHtml(c.name)}</div>
+            <div class="li-sub">${escapeHtml(c.phone || '')}${c.address ? ' · ' + escapeHtml(c.address) : ''}</div>
+            <div class="li-sub">${sales.length} đơn đã mua · Tổng ${formatMoney(totalSpent)}</div>
+          </div>
+          <div class="li-actions">
+            <button class="icon-btn" data-action="edit-customer" data-id="${c.id}">✏️</button>
+            <button class="icon-btn" data-action="delete-customer" data-id="${c.id}">🗑️</button>
+          </div>
+        </div>`;
+        })
+        .join('');
+    }
   }
+
+  updateCustomersList();
+
   document.getElementById('customer-search').addEventListener('input', (e) => {
     state.customerSearch = e.target.value;
-    renderCustomers(app);
+    updateCustomersList();
   });
 }
 
@@ -2051,7 +2111,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=5').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=6').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
