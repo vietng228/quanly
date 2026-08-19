@@ -131,6 +131,7 @@ const state = {
   customerSearch: '',
   inventorySearch: '',
   lookupQuery: '',
+  dashShowAllItems: false,
 };
 
 const TITLES = {
@@ -282,6 +283,7 @@ function onAppClick(e) {
     'go-more': () => setTab('more'),
     'go-tab': () => setTab(t.dataset.tab),
     'set-period': () => { state.period = t.dataset.period; render(); },
+    'toggle-dash-items': () => { state.dashShowAllItems = !state.dashShowAllItems; render(); },
     'add-item': () => openItemForm(null),
     'edit-item': () => openItemForm(DB.getItem(id)),
     'delete-item': () => {
@@ -635,23 +637,31 @@ function computeStats(period) {
   const grossMarginPct = revenue > 0 ? (grossProfit / revenue) * 100 : 0;
   const netMarginPct = revenue > 0 ? (netProfit / revenue) * 100 : 0;
 
-  // top mặt hàng bán chạy trong kỳ
+  // doanh thu / lợi nhuận theo từng mặt hàng trong kỳ
   const byItem = {};
   sales.forEach((s) => {
-    byItem[s.itemId] = byItem[s.itemId] || { qty: 0, revenue: 0 };
+    byItem[s.itemId] = byItem[s.itemId] || { qty: 0, revenue: 0, cost: 0 };
+    const basis = s.costPriceAtSale != null ? s.costPriceAtSale : 0;
     byItem[s.itemId].qty += s.quantity;
     byItem[s.itemId].revenue += s.sellPrice * s.quantity;
+    byItem[s.itemId].cost += basis * s.quantity;
   });
-  const top = Object.entries(byItem)
-    .map(([itemId, v]) => ({ item: DB.getItem(itemId), ...v }))
+  const itemStats = Object.entries(byItem)
+    .map(([itemId, v]) => ({
+      item: DB.getItem(itemId),
+      qty: v.qty,
+      revenue: v.revenue,
+      cost: v.cost,
+      profit: v.revenue - v.cost,
+    }))
     .filter((x) => x.item)
-    .sort((a, b) => b.revenue - a.revenue)
-    .slice(0, 5);
+    .sort((a, b) => b.revenue - a.revenue);
+  const top = itemStats.slice(0, 5);
 
   return {
     label, revenue, costOfSold, grossProfit, purchaseSpend, thuKhac, chiKhac, netProfit,
     grossMarginPct, netMarginPct,
-    salesCount: sales.length, top,
+    salesCount: sales.length, top, itemStats,
   };
 }
 
@@ -718,17 +728,26 @@ function renderDashboard(app) {
         <div class="value neg">${formatMoney(s.chiKhac)}</div>
       </div>
     </div>
-    <div class="section-title">Mặt hàng bán chạy</div>
+    <div class="section-title" style="display:flex; justify-content:space-between; align-items:baseline">
+      <span>💰 Doanh thu theo mặt hàng${s.itemStats.length > 5 ? ` (${s.itemStats.length})` : ''}</span>
+      ${
+        s.itemStats.length > 5
+          ? `<button class="link-btn" data-action="toggle-dash-items" style="font-size:12px; font-weight:600; color:#2563eb; background:none; border:none; padding:0">${
+              state.dashShowAllItems ? 'Thu gọn' : 'Xem tất cả'
+            }</button>`
+          : ''
+      }
+    </div>
     ${
-      s.top.length === 0
+      s.itemStats.length === 0
         ? '<div class="empty-state">Chưa có dữ liệu bán hàng trong kỳ này.</div>'
-        : s.top
+        : (state.dashShowAllItems ? s.itemStats : s.top)
             .map(
               (x) => `
-      <div class="list-item">
+      <div class="list-item" data-action="view-item-detail" data-id="${x.item.id}">
         <div class="li-main">
           <div class="li-title">${escapeHtml(x.item.name)}</div>
-          <div class="li-sub">Đã bán ${x.qty} · Doanh thu ${formatMoney(x.revenue)}</div>
+          <div class="li-sub">Đã bán ${x.qty} · Doanh thu ${formatMoney(x.revenue)} · Lãi <span class="${x.profit >= 0 ? 'pos' : 'neg'}">${formatMoney(x.profit)}</span></div>
         </div>
       </div>`
             )
@@ -1626,11 +1645,58 @@ function findDuplicateImeis(imeiList, excludeId) {
   return imeiList.filter((im) => existing.has(im.toLowerCase()));
 }
 
+// Tìm các IMEI/số seri trong danh sách đã được BÁN trước đó (ở bất kỳ lần
+// bán nào) — dùng để chặn việc nhập lại 1 máy đã bán ra (nhập sau khi bán là
+// dữ liệu sai, máy đó không còn ở cửa hàng nữa). Trả về mảng {imei, sale}.
+function findImeisAlreadySold(imeiList, excludeSaleId) {
+  if (!imeiList.length) return [];
+  const soldMap = new Map();
+  DB.getSales().forEach((s) => {
+    if (excludeSaleId && s.id === excludeSaleId) return;
+    (s.imei || '')
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .forEach((im) => {
+        if (!soldMap.has(im.toLowerCase())) soldMap.set(im.toLowerCase(), s);
+      });
+  });
+  const result = [];
+  imeiList.forEach((im) => {
+    const sale = soldMap.get(im.toLowerCase());
+    if (sale) result.push({ imei: im, sale });
+  });
+  return result;
+}
+
+// Tồn kho thực tế còn lại của 1 mặt hàng (đã nhập - đã bán), có thể loại trừ
+// chính lần bán đang sửa (excludeSaleId) để tính đúng khi sửa lại 1 đơn cũ.
+function getAvailableStockForItem(itemId, excludeSaleId) {
+  const purchased = DB.getPurchases()
+    .filter((p) => p.itemId === itemId)
+    .reduce((s, p) => s + p.quantity, 0);
+  const sold = DB.getSales()
+    .filter((s) => s.itemId === itemId && s.id !== excludeSaleId)
+    .reduce((s, x) => s + x.quantity, 0);
+  return purchased - sold;
+}
+
 function submitPurchaseForm() {
   if (!formDraft.itemId) { toast('Vui lòng chọn mặt hàng', true); return; }
   syncImeiLinesFromDom();
   const imeiList = formDraft.imeiLines.map((s) => (s || '').trim()).filter(Boolean);
   const imei = imeiList.join(', ');
+
+  // Chặn cứng: không cho nhập lại 1 IMEI đã từng được bán — nhập sau khi bán
+  // là dấu hiệu nhầm lẫn (máy đó đã ra khỏi cửa hàng, không thể "nhập" lại).
+  const alreadySold = findImeisAlreadySold(imeiList, null);
+  if (alreadySold.length) {
+    const detail = alreadySold
+      .map((x) => `• ${x.imei} — đã bán ngày ${formatDateVN(x.sale.date)}${x.sale.customerName ? ' cho ' + x.sale.customerName : ''}`)
+      .join('\n');
+    alert(`❌ Không thể lưu lần nhập này.\n\nCác IMEI/số seri sau đã bán ra trước đó, không thể nhập lại (kiểm tra lại xem có nhầm máy không):\n${detail}`);
+    return;
+  }
 
   const dupImeis = findDuplicateImeis(imeiList, formDraft.editId);
   if (dupImeis.length) {
@@ -1784,6 +1850,32 @@ function submitSaleForm() {
   const item = DB.getItem(formDraft.itemId);
   const costBasis = item ? getLatestCostPrice(item.id) : 0;
 
+  // Chặn cứng: không cho bán quá số lượng còn tồn kho thực tế — đây chính là
+  // lỗi "hết hàng vẫn bán được" đã xảy ra do trước đây không có bước kiểm
+  // tra này. excludeSaleId để khi SỬA lại 1 đơn cũ không bị tự trừ đôi.
+  const quantity = Number(document.getElementById('f-qty').value) || 1;
+  const availableStock = item ? getAvailableStockForItem(item.id, formDraft.editId) : 0;
+  if (quantity > availableStock) {
+    if (availableStock <= 0) {
+      toast(`⚠️ "${item?.name || 'Mặt hàng'}" đã HẾT HÀNG (tồn kho: 0), không thể bán thêm.`, true);
+    } else {
+      toast(`⚠️ Không đủ hàng: "${item?.name || ''}" chỉ còn ${availableStock} ${item?.unit || ''} trong kho (đang bán ${quantity}).`, true);
+    }
+    return;
+  }
+
+  // Chặn cứng: không cho bán trùng 1 IMEI/số seri đã được bán ở đơn khác.
+  const imeiRaw = document.getElementById('f-sale-imei').value.trim();
+  const imeiList = imeiRaw.split(',').map((s) => s.trim()).filter(Boolean);
+  const dupSoldImeis = findImeisAlreadySold(imeiList, formDraft.editId);
+  if (dupSoldImeis.length) {
+    const detail = dupSoldImeis
+      .map((x) => `• ${x.imei} — đã bán ngày ${formatDateVN(x.sale.date)}${x.sale.customerName ? ' cho ' + x.sale.customerName : ''}`)
+      .join('\n');
+    alert(`❌ Không thể lưu lần bán này.\n\nCác IMEI/số seri sau đã được bán ở 1 đơn khác trước đó (trùng lặp):\n${detail}`);
+    return;
+  }
+
   const customerName = document.getElementById('f-cust-name').value.trim();
   const customerPhone = document.getElementById('f-cust-phone').value.trim();
   const customerAddress = document.getElementById('f-cust-address').value.trim();
@@ -1814,10 +1906,10 @@ function submitSaleForm() {
     itemId: formDraft.itemId,
     customerId,
     date: document.getElementById('f-date').value || todayStr(),
-    quantity: Number(document.getElementById('f-qty').value) || 1,
+    quantity,
     sellPrice: parseMoneyInput(document.getElementById('f-sell-price').value),
     costPriceAtSale: costBasis,
-    imei: document.getElementById('f-sale-imei').value.trim(),
+    imei: imeiRaw,
     customerName,
     customerPhone,
     customerAddress,
@@ -3152,7 +3244,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=18').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=19').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
