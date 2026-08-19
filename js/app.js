@@ -336,6 +336,7 @@ function onAppClick(e) {
     'do-backup': doBackup,
     'trigger-restore': () => document.getElementById('restore-file-input').click(),
     'do-clear-all': doClearAll,
+    'do-merge-duplicates': doMergeDuplicates,
     'share-customers': shareCustomers,
     'trigger-import': () => document.getElementById(`f-import-${t.dataset.type}`).click(),
     'download-import-template': () => downloadExcelTemplate(t.dataset.type),
@@ -457,6 +458,11 @@ function onSheetClick(e) {
         document.getElementById('f-item-barcode').value = code;
       });
     },
+    'scan-for-item-code-field': () => {
+      Scanner.open((code) => {
+        document.getElementById('f-item-code').value = code;
+      });
+    },
     'scan-for-sale-imei': () => {
       Scanner.open((code) => {
         document.getElementById('f-sale-imei').value = code;
@@ -497,6 +503,22 @@ function onSheetClick(e) {
     'edit-purchase': () => openPurchaseForm(DB.getPurchases().find((p) => p.id === t.dataset.id)),
     'edit-sale': () => openSaleForm(DB.getSales().find((s) => s.id === t.dataset.id)),
     'view-item-detail': () => { closeSheet(); openItemStockSheetById(t.dataset.id); },
+    'merge-item-group': () => {
+      const name = t.dataset.name;
+      const inv = computeInventory().filter((x) => (x.item.name || '').trim().toLowerCase() === (name || '').trim().toLowerCase());
+      const ids = inv.map((x) => x.item.id);
+      if (ids.length < 2) { toast('Không có bản ghi trùng để gộp', true); return; }
+      if (
+        !confirmDialog(
+          `Gộp ${ids.length} bản ghi "${name}" thành 1 mã duy nhất? Toàn bộ lịch sử nhập/bán được giữ nguyên, chỉ gộp mã mặt hàng — không thể hoàn tác trừ khi phục hồi từ backup. Tiếp tục?`
+        )
+      )
+        return;
+      mergeItemGroup(ids);
+      toast('Đã gộp thành 1 mã');
+      closeSheet();
+      render();
+    },
     'delete-item': () => {
       if (confirmDialog('Xoá mặt hàng này? (Các lần nhập/bán liên quan vẫn giữ nguyên lịch sử)')) {
         DB.deleteItem(t.dataset.id);
@@ -926,6 +948,81 @@ function getImeiBreakdownForItems(itemIds) {
   return { available, sold };
 }
 
+// Gộp thật sự nhiều bản ghi mặt hàng trùng tên thành 1 mã duy nhất: chuyển
+// toàn bộ phiếu nhập/bán của các mã bị gộp sang mã "chính" (mã tạo sớm nhất),
+// tự backfill các trường còn thiếu (mã vạch/mã SP/model/giá mặc định) từ các
+// bản ghi kia, rồi xoá các bản ghi thừa. KHÔNG đụng tới lịch sử nhập/bán —
+// chỉ đổi itemId của từng dòng sang mã chính, số liệu tồn kho/lãi giữ nguyên.
+function mergeItemGroup(itemIds) {
+  const items = itemIds.map((id) => DB.getItem(id)).filter(Boolean);
+  if (items.length < 2) return null;
+  items.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  const primary = { ...items[0] };
+  const others = items.slice(1);
+  others.forEach((o) => {
+    if (!primary.barcode && o.barcode) primary.barcode = o.barcode;
+    if (!primary.productCode && o.productCode) primary.productCode = o.productCode;
+    if (!primary.model && o.model) primary.model = o.model;
+    if (!primary.note && o.note) primary.note = o.note;
+    if (!primary.defaultCostPrice && o.defaultCostPrice) primary.defaultCostPrice = o.defaultCostPrice;
+    if (!primary.defaultSellPrice && o.defaultSellPrice) primary.defaultSellPrice = o.defaultSellPrice;
+  });
+  const otherIds = others.map((o) => o.id);
+  DB.getPurchases().forEach((p) => {
+    if (otherIds.includes(p.itemId)) DB.savePurchase({ ...p, itemId: primary.id });
+  });
+  DB.getSales().forEach((s) => {
+    if (otherIds.includes(s.itemId)) DB.saveSale({ ...s, itemId: primary.id });
+  });
+  primary.lastCostPrice = getLatestCostPrice(primary.id) || primary.lastCostPrice;
+  DB.saveItem(primary);
+  otherIds.forEach((id) => DB.deleteItem(id));
+  return primary.id;
+}
+
+// Gộp toàn bộ các nhóm mặt hàng đang bị trùng tên trong cả danh mục (dùng
+// cho nút "Gộp tất cả" ở Cài đặt) — tìm mọi nhóm có >1 bản ghi rồi gộp từng
+// nhóm bằng mergeItemGroup ở trên.
+function mergeAllDuplicateItems() {
+  const groups = new Map();
+  DB.getItems().forEach((i) => {
+    const key = (i.name || '').trim().toLowerCase();
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(i);
+  });
+  const dupGroups = [...groups.values()].filter((g) => g.length > 1);
+  let removed = 0;
+  dupGroups.forEach((g) => {
+    mergeItemGroup(g.map((i) => i.id));
+    removed += g.length - 1;
+  });
+  return { groupCount: dupGroups.length, removed };
+}
+
+function doMergeDuplicates() {
+  const groups = new Map();
+  DB.getItems().forEach((i) => {
+    const key = (i.name || '').trim().toLowerCase();
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(i);
+  });
+  const dupGroups = [...groups.values()].filter((g) => g.length > 1);
+  if (dupGroups.length === 0) {
+    toast('Không có mặt hàng nào đang trùng tên cần gộp');
+    return;
+  }
+  const totalRecords = dupGroups.reduce((s, g) => s + g.length, 0);
+  if (
+    !confirmDialog(
+      `Tìm thấy ${dupGroups.length} nhóm mặt hàng trùng tên (tổng ${totalRecords} mã), sẽ gộp mỗi nhóm còn đúng 1 mã. Toàn bộ lịch sử nhập/bán được giữ nguyên, chỉ gộp mã mặt hàng — không thể hoàn tác trừ khi phục hồi từ backup. Tiếp tục?`
+    )
+  )
+    return;
+  const { groupCount, removed } = mergeAllDuplicateItems();
+  toast(`Đã gộp ${groupCount} nhóm, giảm ${removed} mã trùng`);
+  render();
+}
+
 function openItemStockSheet(name) {
   const key = (name || '').trim().toLowerCase();
   const inv = computeInventory().filter((x) => (x.item.name || '').trim().toLowerCase() === key);
@@ -1058,7 +1155,9 @@ function openItemStockSheet(name) {
       <button class="btn btn-secondary" data-action="edit-item" data-id="${first.id}">✏️ Sửa mặt hàng</button>
       <button class="btn btn-danger" data-action="delete-item" data-id="${first.id}">🗑️ Xoá</button>
     </div>`
-      : '';
+      : `<div class="btn-row">
+      <button class="btn btn-primary" data-action="merge-item-group" data-name="${escapeHtml(first.name)}">🔗 Gộp ${inv.length} bản ghi thành 1 mã</button>
+    </div>`;
 
   openSheet(`
     <div class="sheet-title">📦 ${escapeHtml(first.name)}</div>
@@ -1427,7 +1526,10 @@ function openItemForm(item) {
     <div class="form-row">
       <div class="form-group">
         <label>Mã sản phẩm (tuỳ chọn)</label>
-        <input type="text" id="f-item-code" value="${escapeHtml(item?.productCode || '')}" placeholder="VD: SP001" />
+        <div class="input-with-btn">
+          <input type="text" id="f-item-code" value="${escapeHtml(item?.productCode || '')}" placeholder="Quét hoặc nhập tay" />
+          <button type="button" data-action="scan-for-item-code-field">📷</button>
+        </div>
       </div>
       <div class="form-group">
         <label>Model (tuỳ chọn)</label>
@@ -2651,6 +2753,11 @@ function renderSettings(app) {
       <p>${counts.items} mặt hàng · ${counts.purchases} lần nhập · ${counts.sales} lần bán · ${counts.transactions} khoản thu/chi · ${counts.customers} khách hàng</p>
     </div>
     <div class="settings-item">
+      <h3>🔗 Gộp mặt hàng trùng tên thành 1 mã</h3>
+      <p>Ở màn hình Mặt hàng, những sản phẩm cùng tên đang chỉ được gộp để HIỂN THỊ (nhãn "🔗 Gộp"), thực chất phía sau vẫn là nhiều mã riêng biệt. Bấm nút dưới để gộp thật sự tất cả các nhóm này thành đúng 1 mã/mặt hàng cho dễ nhìn — toàn bộ lịch sử nhập/bán được giữ nguyên, chỉ gộp mã mặt hàng, không thể hoàn tác trừ khi phục hồi từ backup.</p>
+      <button class="btn btn-primary" data-action="do-merge-duplicates">🔗 Gộp tất cả mặt hàng trùng tên</button>
+    </div>
+    <div class="settings-item">
       <h3>☁️ Đồng bộ nhiều người dùng (GitHub riêng tư)</h3>
       <p>Cho phép nhiều nhân viên trên nhiều máy cùng dùng chung 1 bộ dữ liệu, lưu trên 1 repository <b>private</b> riêng trên GitHub (khác với repo chứa mã nguồn app đang public). <b>Bắt buộc phải có mạng</b> khi đã bật đồng bộ. Mỗi máy cần nhập cấu hình này 1 lần.</p>
       ${cloudSyncFormHtml()}
@@ -3476,7 +3583,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=21').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=22').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
