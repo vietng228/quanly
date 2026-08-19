@@ -1462,7 +1462,7 @@ function printInvoice(sale) {
   ${
     invoiceQr
       ? `<hr /><div class="center qr-box">
-          <div style="font-size:12.5px;margin-bottom:4px">Quét mã để chuyển khoản${shop.qrDynamicAmount !== false && VIETQR_BANKS.find((b) => b.code === shop.bankCode) && shop.bankAccountNo ? ` (đã điền sẵn ${formatMoney(total)})` : ''}</div>
+          <div style="font-size:12.5px;margin-bottom:4px">Quét mã để chuyển khoản${shop.qrDynamicAmount !== false && VIETQR_BANKS.find((b) => b.code === shop.bankCode) && shop.bankAccountNo ? : ''}</div>
           <img src="${invoiceQr.dataUrl}" style="width:140px;height:140px;object-fit:contain" />
           ${invoiceQr.caption ? `<div style="font-size:12px;margin-top:4px">${escapeHtml(invoiceQr.caption)}</div>` : ''}
         </div>`
