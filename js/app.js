@@ -7,7 +7,7 @@ const CATEGORIES = [
   'Điều hòa',
   'Máy hút ẩm',
   'Máy lọc không khí',
-  'Dịch vụ lắp đặt Tivi',
+  'Dịch vụ cài đặt Tivi',
   'Khác',
 ];
 
@@ -18,7 +18,7 @@ const CATEGORY_ICONS = {
   'Điều hòa': '❄️',
   'Máy hút ẩm': '💧',
   'Máy lọc không khí': '🌬️',
-  'Dịch vụ lắp đặt Tivi': '🔧',
+  'Dịch vụ cài đặt Tivi': '🔧',
   'Khác': '📦',
 };
 function categoryIcon(cat) {
