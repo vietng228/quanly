@@ -28,6 +28,77 @@ function formatDateVN(isoStr) {
   return `${d}/${m}/${y}`;
 }
 
+// Dạng đầy đủ dùng cho hoá đơn in: "Ngày 18 tháng 08 năm 2026"
+function formatDateVNFull(isoStr) {
+  if (!isoStr) return '';
+  const [y, m, d] = isoStr.split('-');
+  return `Ngày ${d} tháng ${m} năm ${y}`;
+}
+
+// Đọc số tiền VNĐ bằng chữ (VD: 5800000 -> "Năm triệu tám trăm nghìn đồng").
+// Dùng cho dòng "(...đồng chẵn)" in trên hoá đơn bán hàng.
+const _CHU_SO = ['không', 'một', 'hai', 'ba', 'bốn', 'năm', 'sáu', 'bảy', 'tám', 'chín'];
+function _docSoDv(dv, chuc) {
+  if (dv === 1) return chuc >= 2 ? 'mốt' : 'một';
+  if (dv === 5) return chuc >= 1 ? 'lăm' : 'năm';
+  return _CHU_SO[dv];
+}
+function _docBaChuSo(so, dayDu) {
+  const tram = Math.floor(so / 100);
+  const chucDv = so % 100;
+  const chuc = Math.floor(chucDv / 10);
+  const dv = chucDv % 10;
+  let kq = '';
+  if (tram === 0 && dayDu) {
+    kq += 'không trăm ';
+  } else if (tram !== 0) {
+    kq += _CHU_SO[tram] + ' trăm ';
+  }
+  if (chuc === 0) {
+    if (dv > 0) {
+      if (tram !== 0 || dayDu) kq += 'linh ';
+      kq += _docSoDv(dv, chuc);
+    }
+  } else if (chuc === 1) {
+    kq += 'mười ';
+    if (dv > 0) kq += _docSoDv(dv, chuc);
+  } else {
+    kq += _CHU_SO[chuc] + ' mươi';
+    if (dv > 0) kq += ' ' + _docSoDv(dv, chuc);
+  }
+  return kq.trim();
+}
+function soTienBangChu(soTien) {
+  soTien = Math.round(Math.abs(Number(soTien) || 0));
+  if (soTien === 0) return 'Không đồng';
+  const DON_VI = ['', 'nghìn', 'triệu', 'tỷ', 'nghìn tỷ', 'triệu tỷ'];
+  const groups = [];
+  let n = soTien;
+  while (n > 0) {
+    groups.push(n % 1000);
+    n = Math.floor(n / 1000);
+  }
+  const parts = [];
+  for (let i = groups.length - 1; i >= 0; i--) {
+    const g = groups[i];
+    if (g === 0) continue;
+    const dayDu = parts.length > 0;
+    let groupText = _docBaChuSo(g, dayDu);
+    if (DON_VI[i]) groupText += ' ' + DON_VI[i];
+    parts.push(groupText);
+  }
+  let result = parts.join(' ');
+  result = result.charAt(0).toUpperCase() + result.slice(1);
+  return result + ' đồng';
+}
+
+// Chuyển cú pháp in đậm kiểu markdown (**chữ**) sang <b> — dùng cho ô "Thông
+// tin bảo hành" tự do trong Cài đặt, để người dùng có thể tự in đậm 1 phần nội
+// dung khi in hoá đơn (VD: **Hộp 30 ngày**) mà không cần thêm control phức tạp.
+function mdBoldToHtml(str) {
+  return String(str).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+}
+
 // Trả về mốc đầu ngày / đầu tuần (thứ 2) / đầu tháng dạng ISO yyyy-mm-dd
 function startOfWeek(dateObj) {
   const d = new Date(dateObj);

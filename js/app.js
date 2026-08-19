@@ -1288,6 +1288,22 @@ function openSaleForm(s) {
       </div>
       <p class="help-text">Dùng để tra cứu bảo hành sau này theo từng máy đã bán.</p>
     </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Hình thức thanh toán</label>
+        <select id="f-payment-method">
+          ${['Tiền mặt', 'Chuyển khoản', 'Khác'].map((m) => `<option value="${m}" ${(s?.paymentMethod || 'Tiền mặt') === m ? 'selected' : ''}>${m}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Chiết khấu (%)</label>
+        <input type="number" id="f-discount-percent" value="${s?.discountPercent ?? 0}" min="0" max="100" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Tiền khách đưa (tuỳ chọn, để tính tiền thừa trên hoá đơn)</label>
+      <input type="number" id="f-cash-given" value="${s?.cashGiven ?? ''}" min="0" placeholder="Bỏ trống nếu không cần in tiền thừa" />
+    </div>
     <div class="section-title" style="margin-top:4px">Thông tin khách hàng</div>
     <button type="button" class="btn btn-secondary" data-action="open-customer-picker-for-sale" style="margin-bottom:12px">📇 Chọn khách đã lưu</button>
     <div class="form-group">
@@ -1359,8 +1375,18 @@ function submitSaleForm() {
     customerPhone,
     customerAddress,
     note: document.getElementById('f-note').value.trim(),
+    paymentMethod: document.getElementById('f-payment-method').value,
+    discountPercent: Number(document.getElementById('f-discount-percent').value) || 0,
+    cashGiven: document.getElementById('f-cash-given').value === '' ? null : Number(document.getElementById('f-cash-given').value),
   };
   const isNewSale = !s.id;
+  // Gán số hoá đơn 1 lần duy nhất khi tạo mới, giữ nguyên khi sửa lại sau này.
+  if (isNewSale) {
+    s.invoiceNo = 'HD' + String(DB.getSales().length + 1).padStart(6, '0');
+  } else {
+    const old = DB.getSales().find((x) => x.id === s.id);
+    s.invoiceNo = old?.invoiceNo || 'HD' + String(DB.getSales().length).padStart(6, '0');
+  }
   const saved = DB.saveSale(s);
   toast('Đã lưu lần bán hàng');
   closeSheet();
@@ -1399,8 +1425,14 @@ function printInvoice(sale) {
   if (!sale) { toast('Không tìm thấy đơn bán để in', true); return; }
   const item = DB.getItem(sale.itemId);
   const shop = DB.getShopInfo();
-  const total = sale.sellPrice * sale.quantity;
+  const subtotal = sale.sellPrice * sale.quantity;
+  const discountPercent = sale.discountPercent || 0;
+  const discountAmount = Math.round((subtotal * discountPercent) / 100);
+  const total = subtotal - discountAmount;
+  const hasCashInfo = sale.paymentMethod !== 'Chuyển khoản' && sale.cashGiven != null && sale.cashGiven >= 0;
+  const changeAmount = hasCashInfo ? Math.max(0, sale.cashGiven - total) : 0;
   const invoiceQr = resolveInvoiceQr(shop, sale, total);
+  const invoiceNo = sale.invoiceNo || ('HD' + String(DB.getSales().findIndex((x) => x.id === sale.id) + 1).padStart(6, '0'));
   const win = window.open('', '_blank', 'width=380,height=600');
   if (!win) {
     toast('Trình duyệt đang chặn cửa sổ in. Hãy cho phép popup rồi bấm in lại.', true);
@@ -1412,63 +1444,78 @@ function printInvoice(sale) {
 <style>
   @page { margin: 4mm; }
   * { box-sizing: border-box; }
-  body { font-family: Arial, Helvetica, 'Segoe UI', sans-serif; width: 78mm; margin: 0 auto; padding: 6px; font-size: 14px; line-height: 1.4; color: #000; }
+  body { font-family: Arial, Helvetica, 'Segoe UI', sans-serif; width: 78mm; margin: 0 auto; padding: 6px; font-size: 13.5px; line-height: 1.45; color: #000; }
   .center { text-align: center; }
-  .shop-name { font-size: 17px; font-weight: bold; }
+  .shop-name { font-size: 19px; font-weight: bold; }
   hr { border: none; border-top: 1px dashed #000; margin: 8px 0; }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  td { padding: 3px 0; vertical-align: top; }
-  .right { text-align: right; }
-  .title-row { font-weight: bold; text-align: center; margin: 4px 0; letter-spacing: 1px; font-size: 15px; }
-  .total-row td { font-weight: bold; font-size: 16.5px; padding-top: 6px; }
-  .footer { text-align: center; margin-top: 10px; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  td, th { padding: 3px 0; vertical-align: top; text-align: left; }
+  th { font-weight: bold; font-size: 12.5px; border-bottom: 1px solid #000; }
+  .right, td.right, th.right { text-align: right; }
+  .cc { text-align: center; }
+  .invoice-title { font-weight: bold; text-align: center; margin: 10px 0 2px; letter-spacing: 1px; font-size: 16px; }
+  .section-gap { margin-top: 10px; }
+  .customer-block div { margin-bottom: 2px; }
+  .summary-block { width: 88%; margin: 10px auto 0; }
+  .summary-block .row-line { margin-bottom: 2px; }
+  .summary-block .row-line.grand { font-weight: bold; font-size: 15px; margin-top: 4px; }
+  .footer { text-align: center; margin-top: 14px; font-size: 13px; font-style: italic; }
   .row-line { display: flex; justify-content: space-between; gap: 8px; }
-  .warranty-box { font-size: 12.5px; line-height: 1.5; }
+  .amount-words { text-align: center; font-style: italic; margin: 10px 0; font-size: 13px; }
+  .warranty-box { font-size: 12.5px; line-height: 1.6; margin-top: 14px; }
+  .warranty-box p { margin: 6px 0; }
   .qr-box img { border: 1px solid #ccc; border-radius: 6px; }
 </style>
 </head>
 <body>
   <div class="center">
     ${shop.name ? `<div class="shop-name">${escapeHtml(shop.name)}</div>` : ''}
-    ${shop.address ? `<div>${escapeHtml(shop.address)}</div>` : ''}
-    ${shop.phone ? `<div>ĐT: ${escapeHtml(shop.phone)}</div>` : ''}
+    ${shop.address ? `<div>Địa chỉ: ${escapeHtml(shop.address)}</div>` : ''}
+    ${shop.phone ? `<div>Điện thoại: ${escapeHtml(shop.phone)}</div>` : ''}
   </div>
-  <hr />
-  <div class="title-row">HOÁ ĐƠN BÁN HÀNG</div>
-  <div class="row-line"><span>Ngày:</span><span>${formatDateVN(sale.date)}</span></div>
-  <div class="row-line"><span>Khách:</span><span>${escapeHtml(sale.customerName || 'Khách lẻ')}</span></div>
-  ${sale.customerPhone ? `<div class="row-line"><span>SĐT:</span><span>${escapeHtml(sale.customerPhone)}</span></div>` : ''}
-  ${sale.customerAddress ? `<div>Địa chỉ: ${escapeHtml(sale.customerAddress)}</div>` : ''}
-  <hr />
-  <table>
-    <tr><td colspan="2">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</td></tr>
+  <div class="invoice-title">HÓA ĐƠN BÁN HÀNG</div>
+  <div class="center">Số HĐ: ${escapeHtml(invoiceNo)}</div>
+  <div class="center">${formatDateVNFull(sale.date)}</div>
+  <div class="customer-block section-gap">
+    <div>Khách hàng: ${escapeHtml(sale.customerName || 'Khách lẻ')}</div>
+    ${sale.customerPhone ? `<div>SĐT: ${escapeHtml(sale.customerPhone)}</div>` : ''}
+    <div>Địa chỉ: ${sale.customerAddress ? escapeHtml(sale.customerAddress) : '-'}</div>
+    <div>Hình thức thanh toán: ${escapeHtml(sale.paymentMethod || 'Tiền mặt')}</div>
+  </div>
+  <table class="section-gap">
+    <tr><th>Đơn giá</th><th class="cc">SL</th><th class="right">Thành tiền</th></tr>
+    <tr><td colspan="3">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</td></tr>
+    ${sale.imei ? `<tr><td colspan="3">IMEI: ${escapeHtml(sale.imei)}</td></tr>` : ''}
     <tr>
-      <td>${sale.quantity} x ${formatMoney(sale.sellPrice)}</td>
-      <td class="right">${formatMoney(total)}</td>
+      <td>${formatMoney(sale.sellPrice)}</td>
+      <td class="cc">${sale.quantity}</td>
+      <td class="right">${formatMoney(subtotal)}</td>
     </tr>
-    ${sale.imei ? `<tr><td colspan="2">IMEI/Seri: ${escapeHtml(sale.imei)}</td></tr>` : ''}
   </table>
   <hr />
-  <table>
-    <tr class="total-row"><td>TỔNG CỘNG</td><td class="right">${formatMoney(total)}</td></tr>
-  </table>
-  <hr />
+  <div class="summary-block">
+    <div class="row-line"><span>Tổng tiền hàng:</span><span>${formatMoney(subtotal)}</span></div>
+    <div class="row-line"><span>Chiết khấu ${discountPercent}%:</span><span>${formatMoney(discountAmount)}</span></div>
+    <div class="row-line grand"><span>Tổng thanh toán:</span><span>${formatMoney(total)}</span></div>
+    ${hasCashInfo ? `<div class="row-line"><span>Tiền khách đưa:</span><span>${formatMoney(sale.cashGiven)}</span></div>` : ''}
+    ${hasCashInfo ? `<div class="row-line"><span>Tiền thừa trả khách:</span><span>${formatMoney(changeAmount)}</span></div>` : ''}
+  </div>
+  <div class="amount-words">(${soTienBangChu(total)} chẵn)</div>
   ${sale.note ? `<div>Ghi chú: ${escapeHtml(sale.note)}</div>` : ''}
   ${
-    shop.warranty
-      ? `<hr /><div class="warranty-box"><b>🛡️ Bảo hành:</b><br/>${escapeHtml(shop.warranty).replace(/\n/g, '<br/>')}</div>`
-      : ''
-  }
-  ${
     invoiceQr
-      ? `<hr /><div class="center qr-box">
-          <div style="font-size:12.5px;margin-bottom:4px">Quét mã để chuyển khoản${shop.qrDynamicAmount !== false && VIETQR_BANKS.find((b) => b.code === shop.bankCode) && shop.bankAccountNo ? : ''}</div>
+      ? `<div class="center qr-box section-gap">
           <img src="${invoiceQr.dataUrl}" style="width:140px;height:140px;object-fit:contain" />
           ${invoiceQr.caption ? `<div style="font-size:12px;margin-top:4px">${escapeHtml(invoiceQr.caption)}</div>` : ''}
         </div>`
       : ''
   }
-  <div class="footer">Cảm ơn quý khách!</div>
+  ${
+    shop.warranty
+      ? `<div class="warranty-box">${mdBoldToHtml(escapeHtml(shop.warranty)).replace(/\n/g, '<br/>')}</div>`
+      : ''
+  }
+  <div class="footer">Cảm ơn và hẹn gặp lại!</div>
 </body></html>`);
   win.document.close();
   setTimeout(() => {
@@ -2565,7 +2612,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=12').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=13').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
