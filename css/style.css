@@ -214,6 +214,7 @@ html, body {
 
 #scanner-reader { width: 100%; flex: 1; background: black; }
 .scanner-error { color: var(--red); padding: 12px; font-size: 13px; text-align: center; }
+.scanner-hint { color: white; background: rgba(0,0,0,0.6); padding: 10px 16px; font-size: 12.5px; text-align: center; }
 
 /* ---------- Toast ---------- */
 .toast {
