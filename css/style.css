@@ -31,6 +31,12 @@ html, body {
   text-align: center;
 }
 .topbar h1 { margin: 0; font-size: 18px; font-weight: 600; }
+.cloud-status {
+  margin-top: 4px; font-size: 11.5px; opacity: 0.9; min-height: 15px;
+}
+.cloud-status.pulling, .cloud-status.pushing { color: #dbeafe; }
+.cloud-status.error, .cloud-status.conflict { color: #fecaca; font-weight: 600; }
+.cloud-status.idle { color: #dcfce7; }
 
 #app {
   padding: 12px 12px calc(90px + var(--safe-bottom));
