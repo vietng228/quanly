@@ -491,6 +491,26 @@ function onSheetClick(e) {
         render();
       }
     },
+    'delete-purchase': () => {
+      if (confirmDialog('Huỷ lần nhập hàng này? (Số lượng sẽ trừ khỏi tồn kho)')) {
+        const p = DB.getPurchases().find((x) => x.id === t.dataset.id);
+        DB.deletePurchase(t.dataset.id);
+        toast('Đã huỷ lần nhập hàng');
+        closeSheet();
+        render();
+        if (p) openItemStockSheetById(p.itemId);
+      }
+    },
+    'delete-sale': () => {
+      if (confirmDialog('Xoá lần bán hàng này?')) {
+        const s = DB.getSales().find((x) => x.id === t.dataset.id);
+        DB.deleteSale(t.dataset.id);
+        toast('Đã xoá lần bán hàng');
+        closeSheet();
+        render();
+        if (s) openItemStockSheetById(s.itemId);
+      }
+    },
     'submit-item-form': submitItemForm,
     'submit-purchase-form': submitPurchaseForm,
     'submit-sale-form': submitSaleForm,
@@ -967,6 +987,7 @@ function openItemStockSheet(name) {
         </div>
         <div class="li-actions">
           <button class="icon-btn" data-action="edit-purchase" data-id="${p.id}">✏️</button>
+          <button class="icon-btn" data-action="delete-purchase" data-id="${p.id}">🗑️</button>
         </div>
       </div>`
           )
@@ -993,6 +1014,7 @@ function openItemStockSheet(name) {
         </div>
         <div class="li-actions">
           <button class="icon-btn" data-action="edit-sale" data-id="${s.id}">✏️</button>
+          <button class="icon-btn" data-action="delete-sale" data-id="${s.id}">🗑️</button>
         </div>
       </div>`;
           })
@@ -3130,7 +3152,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=17').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=18').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
