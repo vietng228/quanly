@@ -336,6 +336,7 @@ function onAppClick(e) {
     'print-invoice': () => printInvoice(DB.getSales().find((s) => s.id === id)),
     'add-customer': () => openCustomerForm(null),
     'edit-customer': () => openCustomerForm(DB.getCustomer(id)),
+    'view-customer-detail': () => openCustomerDetailSheet(id),
     'delete-customer': () => {
       if (confirmDialog('Xoá khách hàng này? (Lịch sử đơn bán vẫn giữ nguyên)')) {
         DB.deleteCustomer(id);
@@ -519,6 +520,16 @@ function onSheetClick(e) {
     'edit-item': () => openItemForm(DB.getItem(t.dataset.id)),
     'edit-purchase': () => openPurchaseForm(DB.getPurchases().find((p) => p.id === t.dataset.id)),
     'edit-sale': () => openSaleForm(DB.getSales().find((s) => s.id === t.dataset.id)),
+    'edit-customer': () => openCustomerForm(DB.getCustomer(t.dataset.id)),
+    'print-invoice': () => printInvoice(DB.getSales().find((s) => s.id === t.dataset.id)),
+    'delete-customer': () => {
+      if (confirmDialog('Xoá khách hàng này? (Lịch sử đơn bán vẫn giữ nguyên)')) {
+        DB.deleteCustomer(t.dataset.id);
+        toast('Đã xoá khách hàng');
+        closeSheet();
+        render();
+      }
+    },
     'view-item-detail': () => { closeSheet(); openItemStockSheetById(t.dataset.id); },
     'merge-item-group': () => {
       const name = t.dataset.name;
@@ -2445,7 +2456,7 @@ function renderCustomers(app) {
           const sales = allSales.filter((s) => s.customerId === c.id);
           const totalSpent = sales.reduce((sum, s) => sum + s.sellPrice * s.quantity, 0);
           return `
-        <div class="list-item">
+        <div class="list-item" data-action="view-customer-detail" data-id="${c.id}">
           <div class="li-main">
             <div class="li-title">${escapeHtml(c.name)}</div>
             <div class="li-sub">${escapeHtml(c.phone || '')}${c.address ? ' · ' + escapeHtml(c.address) : ''}</div>
@@ -2467,6 +2478,85 @@ function renderCustomers(app) {
     state.customerSearch = e.target.value;
     updateCustomersList();
   });
+}
+
+// Sheet chi tiết 1 khách hàng — hiện đầy đủ thông tin liên hệ + TOÀN BỘ lịch
+// sử mua hàng (từng lần bán, mặt hàng, số lượng, giá, lãi, IMEI, hình thức
+// thanh toán), có thể in lại hoá đơn hoặc sửa/xoá ngay tại đây — cùng kiểu
+// bấm-vào-để-xem-chi-tiết như mục Mặt hàng/Tồn kho cho đồng nhất.
+function openCustomerDetailSheet(customerId) {
+  const c = DB.getCustomer(customerId);
+  if (!c) { toast('Không tìm thấy khách hàng', true); return; }
+  const sales = DB.getSales()
+    .filter((s) => s.customerId === c.id)
+    .sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0));
+  const totalSpent = sales.reduce((sum, s) => sum + s.sellPrice * s.quantity, 0);
+  const totalProfit = sales.reduce((sum, s) => sum + (s.sellPrice - (s.costPriceAtSale || 0)) * s.quantity, 0);
+  const lastDate = sales.length ? sales[0].date : null;
+
+  const salesHtml =
+    sales.length === 0
+      ? '<div class="empty-state" style="padding:16px">Khách hàng này chưa mua lần nào.</div>'
+      : sales
+          .map((s) => {
+            const item = DB.getItem(s.itemId);
+            const total = s.sellPrice * s.quantity;
+            const profit = (s.sellPrice - (s.costPriceAtSale || 0)) * s.quantity;
+            return `
+      <div class="list-item">
+        <div class="item-icon">${categoryIcon(item?.category)}</div>
+        <div class="li-main">
+          <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</div>
+          <div class="li-sub">${formatDateVN(s.date)} <span class="badge ban">Bán</span></div>
+          <div class="li-sub">SL ${s.quantity} × ${formatMoney(s.sellPrice)} = ${formatMoney(total)}</div>
+          <div class="li-sub">Giá vốn ${formatMoney(s.costPriceAtSale || 0)} · Lãi <span class="${profit >= 0 ? 'pos' : 'neg'}">${formatMoney(profit)}</span> · ${escapeHtml(s.paymentMethod || 'Tiền mặt')}</div>
+          ${s.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(s.imei)}</div>` : ''}
+          ${s.note ? `<div class="li-sub">📝 ${escapeHtml(s.note)}</div>` : ''}
+        </div>
+        <div class="li-actions">
+          <button class="icon-btn" data-action="print-invoice" data-id="${s.id}">🖨️</button>
+          <button class="icon-btn" data-action="edit-sale" data-id="${s.id}">✏️</button>
+        </div>
+      </div>`;
+          })
+          .join('');
+
+  openSheet(`
+    <div class="sheet-title">👤 ${escapeHtml(c.name)}</div>
+    <div class="customer-block" style="margin-top:-6px">
+      ${c.phone ? `<div>📞 ${escapeHtml(c.phone)}</div>` : '<div class="help-text" style="margin:0">Chưa có số điện thoại</div>'}
+      ${c.address ? `<div>📍 ${escapeHtml(c.address)}</div>` : ''}
+      ${c.note ? `<div>📝 ${escapeHtml(c.note)}</div>` : ''}
+    </div>
+    <div class="stat-grid" style="margin-top:14px">
+      <div class="stat-card">
+        <div class="label">Số đơn đã mua</div>
+        <div class="value">${sales.length}</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Tổng đã chi</div>
+        <div class="value">${formatMoney(totalSpent)}</div>
+      </div>
+      <div class="stat-card wide">
+        <div class="label">Lãi mang lại cho shop</div>
+        <div class="value ${totalProfit >= 0 ? 'pos' : 'neg'}">${formatMoney(totalProfit)}</div>
+      </div>
+      ${
+        lastDate
+          ? `<div class="stat-card wide">
+        <div class="label">Lần mua gần nhất</div>
+        <div class="value" style="font-size:16px">${formatDateVN(lastDate)}</div>
+      </div>`
+          : ''
+      }
+    </div>
+    <div class="section-title" style="margin-top:18px">🛒 Lịch sử mua hàng (${sales.length})</div>
+    ${salesHtml}
+    <div class="btn-row" style="margin-top:18px">
+      <button class="btn btn-secondary" data-action="edit-customer" data-id="${c.id}">✏️ Sửa khách hàng</button>
+      <button class="btn btn-danger" data-action="delete-customer" data-id="${c.id}">🗑️ Xoá</button>
+    </div>
+  `);
 }
 
 function csvEscape(v) {
@@ -3619,7 +3709,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=23').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=24').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
