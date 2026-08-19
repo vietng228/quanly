@@ -19,15 +19,29 @@ const Scanner = {
         Html5QrcodeSupportedFormats.UPC_E,
         Html5QrcodeSupportedFormats.CODE_128,
         Html5QrcodeSupportedFormats.CODE_39,
+        Html5QrcodeSupportedFormats.CODABAR,
+        Html5QrcodeSupportedFormats.ITF,
         Html5QrcodeSupportedFormats.QR_CODE,
       ],
+      // Dùng BarcodeDetector gốc của trình duyệt (Chrome Android) nếu có —
+      // nhận diện nhanh & chính xác hơn nhiều so với thư viện JS thuần.
+      experimentalFeatures: { useBarCodeDetectorIfSupported: true },
       verbose: false,
     });
 
-    const config = { fps: 10, qrbox: { width: 260, height: 160 } };
+    // Khung quét co giãn theo kích thước khung hình camera thực tế (tránh lỗi
+    // không nhận diện được gì khi khung quét cấu hình cứng lớn hơn video).
+    const config = {
+      fps: 15,
+      qrbox: (viewfinderWidth, viewfinderHeight) => {
+        const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+        const size = Math.floor(minEdge * 0.7);
+        return { width: size, height: size };
+      },
+    };
 
     this._html5Qr
-      .start({ facingMode: 'environment' }, config, (decodedText) => {
+      .start({ facingMode: { ideal: 'environment' } }, config, (decodedText) => {
         this.close();
         if (typeof this._onResult === 'function') this._onResult(decodedText);
       })

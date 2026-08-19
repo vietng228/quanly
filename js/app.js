@@ -204,6 +204,17 @@ function onSheetClick(e) {
         document.getElementById('f-item-barcode').value = code;
       });
     },
+    'scan-for-purchase-imei': () => {
+      Scanner.open((code) => {
+        const el = document.getElementById('f-purchase-imei');
+        el.value = el.value ? el.value + ', ' + code : code;
+      });
+    },
+    'scan-for-sale-imei': () => {
+      Scanner.open((code) => {
+        document.getElementById('f-sale-imei').value = code;
+      });
+    },
     'submit-item-form': submitItemForm,
     'submit-purchase-form': submitPurchaseForm,
     'submit-sale-form': submitSaleForm,
@@ -569,6 +580,7 @@ function renderPurchases(app) {
           <div class="li-main">
             <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')} <span class="badge nhap">Nhập</span></div>
             <div class="li-sub">${formatDateVN(p.date)} · SL ${p.quantity} × ${formatMoney(p.costPrice)}${p.note ? ' · ' + escapeHtml(p.note) : ''}</div>
+            ${p.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(p.imei)}</div>` : ''}
           </div>
           <div class="li-main" style="flex:0">
             <div class="li-amount">${formatMoney(p.costPrice * p.quantity)}</div>
@@ -638,6 +650,14 @@ function openPurchaseForm(p) {
       <input type="number" id="f-cost-price" value="${p?.costPrice ?? ''}" min="0" placeholder="0" />
     </div>
     <div class="form-group">
+      <label>IMEI / Số seri (tuỳ chọn)</label>
+      <div class="input-with-btn">
+        <input type="text" id="f-purchase-imei" value="${escapeHtml(p?.imei || '')}" placeholder="Quét hoặc nhập tay" />
+        <button type="button" data-action="scan-for-purchase-imei">📷</button>
+      </div>
+      <p class="help-text">Nếu nhập nhiều máy cùng lúc (SL &gt; 1), có thể ghi nhiều IMEI cách nhau bằng dấu phẩy.</p>
+    </div>
+    <div class="form-group">
       <label>Ghi chú</label>
       <textarea id="f-note">${escapeHtml(p?.note || '')}</textarea>
     </div>
@@ -656,6 +676,7 @@ function submitPurchaseForm() {
     date: document.getElementById('f-date').value || todayStr(),
     quantity: Number(document.getElementById('f-qty').value) || 1,
     costPrice: parseMoneyInput(document.getElementById('f-cost-price').value),
+    imei: document.getElementById('f-purchase-imei').value.trim(),
     note: document.getElementById('f-note').value.trim(),
   };
   DB.savePurchase(p);
@@ -687,6 +708,7 @@ function renderSales(app) {
             <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')} <span class="badge ban">Bán</span></div>
             <div class="li-sub">${formatDateVN(s.date)} · SL ${s.quantity} × ${formatMoney(s.sellPrice)}</div>
             <div class="li-sub">👤 ${escapeHtml(s.customerName || 'Khách lẻ')}${s.customerPhone ? ' · ' + escapeHtml(s.customerPhone) : ''}${s.customerAddress ? ' · ' + escapeHtml(s.customerAddress) : ''}</div>
+            ${s.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(s.imei)}</div>` : ''}
           </div>
           <div class="li-main" style="flex:0">
             <div class="li-amount">${formatMoney(s.sellPrice * s.quantity)}</div>
@@ -724,6 +746,14 @@ function openSaleForm(s) {
       <label>Giá bán / đơn vị</label>
       <input type="number" id="f-sell-price" value="${s?.sellPrice ?? ''}" min="0" placeholder="0" />
     </div>
+    <div class="form-group">
+      <label>IMEI / Số seri máy bán (tuỳ chọn)</label>
+      <div class="input-with-btn">
+        <input type="text" id="f-sale-imei" value="${escapeHtml(s?.imei || '')}" placeholder="Quét hoặc nhập tay" />
+        <button type="button" data-action="scan-for-sale-imei">📷</button>
+      </div>
+      <p class="help-text">Dùng để tra cứu bảo hành sau này theo từng máy đã bán.</p>
+    </div>
     <div class="section-title" style="margin-top:4px">Thông tin khách hàng</div>
     <button type="button" class="btn btn-secondary" data-action="open-customer-picker-for-sale" style="margin-bottom:12px">📇 Chọn khách đã lưu</button>
     <div class="form-group">
@@ -756,17 +786,44 @@ function submitSaleForm() {
   if (!formDraft.itemId) { toast('Vui lòng chọn mặt hàng', true); return; }
   const item = DB.getItem(formDraft.itemId);
   const costBasis = item ? (item.lastCostPrice ?? item.defaultCostPrice ?? 0) : 0;
+
+  const customerName = document.getElementById('f-cust-name').value.trim();
+  const customerPhone = document.getElementById('f-cust-phone').value.trim();
+  const customerAddress = document.getElementById('f-cust-address').value.trim();
+
+  // Tự động lưu/khớp vào danh bạ Khách hàng nếu có nhập tên, kể cả khi
+  // gõ tay (không dùng "Chọn khách đã lưu"), để khách hiện lên ở tab Khách hàng.
+  let customerId = formDraft.customerId || null;
+  if (customerName) {
+    if (customerId) {
+      const existing = DB.getCustomer(customerId);
+      if (existing) {
+        DB.saveCustomer({ ...existing, name: customerName, phone: customerPhone, address: customerAddress });
+      }
+    } else {
+      const matched = customerPhone ? DB.getCustomers().find((c) => c.phone && c.phone === customerPhone) : null;
+      if (matched) {
+        customerId = matched.id;
+        DB.saveCustomer({ ...matched, name: customerName, address: customerAddress || matched.address });
+      } else {
+        const created = DB.saveCustomer({ name: customerName, phone: customerPhone, address: customerAddress });
+        customerId = created.id;
+      }
+    }
+  }
+
   const s = {
     id: formDraft.editId,
     itemId: formDraft.itemId,
-    customerId: formDraft.customerId || null,
+    customerId,
     date: document.getElementById('f-date').value || todayStr(),
     quantity: Number(document.getElementById('f-qty').value) || 1,
     sellPrice: parseMoneyInput(document.getElementById('f-sell-price').value),
     costPriceAtSale: costBasis,
-    customerName: document.getElementById('f-cust-name').value.trim(),
-    customerPhone: document.getElementById('f-cust-phone').value.trim(),
-    customerAddress: document.getElementById('f-cust-address').value.trim(),
+    imei: document.getElementById('f-sale-imei').value.trim(),
+    customerName,
+    customerPhone,
+    customerAddress,
     note: document.getElementById('f-note').value.trim(),
   };
   DB.saveSale(s);
