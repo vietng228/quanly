@@ -182,6 +182,8 @@ function onAppClick(e) {
     'trigger-restore': () => document.getElementById('restore-file-input').click(),
     'do-clear-all': doClearAll,
     'share-customers': shareCustomers,
+    'trigger-import': () => document.getElementById(`f-import-${t.dataset.type}`).click(),
+    'download-import-template': () => downloadExcelTemplate(t.dataset.type),
     'save-shop-info': () => {
       DB.saveShopInfo({
         name: document.getElementById('f-shop-name').value.trim(),
@@ -1465,6 +1467,14 @@ function renderSettings(app) {
       <button class="btn btn-primary" data-action="save-shop-info">Lưu thông tin cửa hàng</button>
     </div>
     <div class="settings-item">
+      <h3>📥 Nhập dữ liệu từ Excel</h3>
+      <p>Nhập nhanh dữ liệu có sẵn từ file Excel (.xlsx) hoặc CSV thay vì gõ tay từng dòng. Tải file mẫu trước để điền đúng cột — dòng nào thiếu thông tin bắt buộc sẽ bị bỏ qua và báo lại sau khi nhập.</p>
+      ${importRowHtml('items', '📦 Danh sách mặt hàng')}
+      ${importRowHtml('customers', '👥 Danh sách khách hàng')}
+      ${importRowHtml('purchases', '📥 Lịch sử nhập hàng')}
+      ${importRowHtml('sales', '💵 Lịch sử bán hàng')}
+    </div>
+    <div class="settings-item">
       <h3>⬇️ Sao lưu dữ liệu (Backup)</h3>
       <p>Xuất toàn bộ dữ liệu ra 1 file .json để lưu trữ hoặc chuyển sang máy khác.</p>
       <button class="btn btn-primary" data-action="do-backup">Xuất file backup</button>
@@ -1490,6 +1500,25 @@ function renderSettings(app) {
     </div>
   `;
   document.getElementById('restore-file-input').addEventListener('change', handleRestoreFile);
+  IMPORT_TYPES.forEach((type) => {
+    document.getElementById(`f-import-${type}`).addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) EXCEL_IMPORTERS[type](file);
+      e.target.value = '';
+    });
+  });
+}
+
+function importRowHtml(type, label) {
+  return `
+    <div style="margin-bottom:14px">
+      <div class="li-title" style="margin-bottom:6px">${label}</div>
+      <div class="btn-row" style="margin-top:0">
+        <button class="btn btn-secondary" data-action="download-import-template" data-type="${type}">Tải file mẫu</button>
+        <button class="btn btn-primary" data-action="trigger-import" data-type="${type}">Chọn file...</button>
+      </div>
+      <input type="file" id="f-import-${type}" accept=".xlsx,.xls,.csv" style="display:none" />
+    </div>`;
 }
 
 function doBackup() {
@@ -1539,6 +1568,328 @@ function doClearAll() {
 }
 
 // ---------------------------------------------------------------------
+// NHẬP DỮ LIỆU TỪ EXCEL (.xlsx / .xls / .csv) — dùng thư viện SheetJS (XLSX)
+// ---------------------------------------------------------------------
+const IMPORT_TYPES = ['items', 'customers', 'purchases', 'sales'];
+
+const IMPORT_ALIASES = {
+  itemName: ['Tên mặt hàng', 'Tên mặt hàng*', 'Tên', 'Mặt hàng'],
+  category: ['Danh mục'],
+  barcode: ['Mã vạch', 'Mã vạch/QR', 'Barcode'],
+  costPrice: ['Giá nhập', 'Giá nhập*', 'Giá nhập mặc định'],
+  sellPrice: ['Giá bán', 'Giá bán*', 'Giá bán mặc định'],
+  unit: ['Đơn vị', 'Đơn vị tính'],
+  note: ['Ghi chú'],
+  custName: ['Tên khách hàng', 'Tên khách hàng*', 'Tên'],
+  phone: ['Số điện thoại', 'Số điện thoại*', 'SĐT', 'Số điện thoại khách', 'Số điện thoại khách hàng'],
+  address: ['Địa chỉ', 'Địa chỉ khách', 'Địa chỉ khách hàng'],
+  date: ['Ngày', 'Ngày (yyyy-mm-dd)', 'Ngày (yyyy-mm-dd)*'],
+  quantity: ['Số lượng', 'Số lượng*'],
+  imei: ['IMEI', 'IMEI/Seri', 'IMEI/Seri (cách nhau bởi dấu phẩy)', 'Số seri'],
+};
+
+const TEMPLATE_HEADERS = {
+  items: ['Tên mặt hàng', 'Danh mục', 'Mã vạch', 'Giá nhập', 'Giá bán', 'Đơn vị', 'Ghi chú'],
+  customers: ['Tên khách hàng', 'Số điện thoại', 'Địa chỉ', 'Ghi chú'],
+  purchases: ['Ngày (yyyy-mm-dd)', 'Tên mặt hàng', 'Số lượng', 'Giá nhập', 'IMEI/Seri', 'Ghi chú'],
+  sales: [
+    'Ngày (yyyy-mm-dd)', 'Tên mặt hàng', 'Số lượng', 'Giá bán', 'IMEI/Seri',
+    'Tên khách hàng', 'Số điện thoại khách', 'Địa chỉ khách', 'Ghi chú',
+  ],
+};
+const TEMPLATE_SAMPLE_ROW = {
+  items: ['Tai nghe Bluetooth ABC', 'Khác', '', 150000, 250000, 'cái', ''],
+  customers: ['Nguyễn Văn A', '0909123456', '123 Đường ABC, Quận 1', ''],
+  purchases: [todayStr(), 'Tai nghe Bluetooth ABC', 5, 150000, '', ''],
+  sales: [todayStr(), 'Tai nghe Bluetooth ABC', 1, 250000, '', 'Nguyễn Văn A', '0909123456', '', ''],
+};
+const TEMPLATE_FILENAMES = {
+  items: 'mau-nhap-mat-hang.xlsx',
+  customers: 'mau-nhap-khach-hang.xlsx',
+  purchases: 'mau-nhap-lich-su-nhap-hang.xlsx',
+  sales: 'mau-nhap-lich-su-ban-hang.xlsx',
+};
+
+function downloadExcelTemplate(type) {
+  const ws = XLSX.utils.aoa_to_sheet([TEMPLATE_HEADERS[type], TEMPLATE_SAMPLE_ROW[type]]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Mẫu');
+  XLSX.writeFile(wb, TEMPLATE_FILENAMES[type]);
+}
+
+function readExcelRows(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('không đọc được file'));
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const wb = XLSX.read(data, { type: 'array', cellDates: true });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        resolve(XLSX.utils.sheet_to_json(ws, { defval: '', raw: true }));
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function normHeader(h) {
+  return String(h || '').trim().toLowerCase();
+}
+function getField(row, aliases) {
+  const keys = Object.keys(row);
+  for (const k of keys) {
+    const nk = normHeader(k);
+    if (aliases.some((a) => normHeader(a) === nk)) return row[k];
+  }
+  return undefined;
+}
+function fieldText(row, aliases) {
+  const v = getField(row, aliases);
+  return v === undefined || v === null ? '' : String(v).trim();
+}
+
+function parseImportDate(val) {
+  if (val instanceof Date && !isNaN(val)) return toISODate(val);
+  if (typeof val === 'number') {
+    const d = new Date(Math.round((val - 25569) * 86400 * 1000));
+    if (!isNaN(d)) return toISODate(d);
+  }
+  if (typeof val === 'string') {
+    const s = val.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (m) {
+      const [, d, mo, y] = m;
+      return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+  }
+  return null;
+}
+
+function findOrCreateItemForImport(name, barcode) {
+  const trimmedName = String(name || '').trim();
+  if (!trimmedName) return null;
+  const items = DB.getItems();
+  let item = null;
+  if (barcode) item = items.find((i) => i.barcode && i.barcode === String(barcode).trim());
+  if (!item) item = items.find((i) => i.name.trim().toLowerCase() === trimmedName.toLowerCase());
+  if (!item) {
+    item = DB.saveItem({
+      name: trimmedName,
+      category: '',
+      barcode: barcode ? String(barcode).trim() : '',
+      defaultCostPrice: 0,
+      defaultSellPrice: 0,
+      unit: 'cái',
+      note: '',
+    });
+  }
+  return item;
+}
+
+function findOrCreateCustomerForImport(name, phone, address) {
+  const trimmedName = String(name || '').trim();
+  if (!trimmedName) return null;
+  const customers = DB.getCustomers();
+  let existing = phone ? customers.find((c) => c.phone && c.phone === String(phone).trim()) : null;
+  if (!existing) existing = customers.find((c) => c.name.trim().toLowerCase() === trimmedName.toLowerCase());
+  const c = {
+    id: existing ? existing.id : null,
+    name: trimmedName,
+    phone: phone ? String(phone).trim() : existing?.phone || '',
+    address: address ? String(address).trim() : existing?.address || '',
+    note: existing?.note || '',
+  };
+  return DB.saveCustomer(c);
+}
+
+function showImportResult(title, successCount, errors) {
+  const errHtml = errors.length
+    ? `<div class="section-title" style="margin-top:10px">Bỏ qua (${errors.length} dòng)</div>
+       <div style="max-height:220px; overflow-y:auto; font-size:12.5px; color:var(--muted); line-height:1.6">${errors
+         .map((e) => escapeHtml(e))
+         .join('<br/>')}</div>`
+    : '';
+  openSheet(`
+    <div class="sheet-title">${escapeHtml(title)}</div>
+    <p>Đã nhập thành công <b>${successCount}</b> dòng.${errors.length ? ` Bỏ qua ${errors.length} dòng bị lỗi (xem chi tiết bên dưới).` : ''}</p>
+    ${errHtml}
+    <div class="btn-row">
+      <button class="btn btn-primary" data-action="close-sheet">Đóng</button>
+    </div>
+  `);
+}
+
+async function importItemsFromExcel(file) {
+  let rows;
+  try {
+    rows = await readExcelRows(file);
+  } catch (err) {
+    toast('Không đọc được file: ' + err.message, true);
+    return;
+  }
+  let success = 0;
+  const errors = [];
+  rows.forEach((row, idx) => {
+    const name = fieldText(row, IMPORT_ALIASES.itemName);
+    if (!name) {
+      errors.push(`Dòng ${idx + 2}: thiếu tên mặt hàng`);
+      return;
+    }
+    const existing = DB.getItems().find((i) => i.name.trim().toLowerCase() === name.toLowerCase());
+    const item = {
+      id: existing ? existing.id : null,
+      name,
+      category: fieldText(row, IMPORT_ALIASES.category) || existing?.category || '',
+      barcode: fieldText(row, IMPORT_ALIASES.barcode) || existing?.barcode || '',
+      defaultCostPrice: parseMoneyInput(getField(row, IMPORT_ALIASES.costPrice) ?? existing?.defaultCostPrice ?? 0),
+      defaultSellPrice: parseMoneyInput(getField(row, IMPORT_ALIASES.sellPrice) ?? existing?.defaultSellPrice ?? 0),
+      unit: fieldText(row, IMPORT_ALIASES.unit) || existing?.unit || 'cái',
+      note: fieldText(row, IMPORT_ALIASES.note) || existing?.note || '',
+    };
+    if (existing) {
+      item.lastCostPrice = existing.lastCostPrice;
+      item.createdAt = existing.createdAt;
+    }
+    DB.saveItem(item);
+    success++;
+  });
+  showImportResult('Nhập mặt hàng từ Excel', success, errors);
+  render();
+}
+
+async function importCustomersFromExcel(file) {
+  let rows;
+  try {
+    rows = await readExcelRows(file);
+  } catch (err) {
+    toast('Không đọc được file: ' + err.message, true);
+    return;
+  }
+  let success = 0;
+  const errors = [];
+  rows.forEach((row, idx) => {
+    const name = fieldText(row, IMPORT_ALIASES.custName);
+    if (!name) {
+      errors.push(`Dòng ${idx + 2}: thiếu tên khách hàng`);
+      return;
+    }
+    findOrCreateCustomerForImport(name, fieldText(row, IMPORT_ALIASES.phone), fieldText(row, IMPORT_ALIASES.address));
+    const note = fieldText(row, IMPORT_ALIASES.note);
+    if (note) {
+      const customers = DB.getCustomers();
+      const c = customers.find((x) => x.name.trim().toLowerCase() === name.toLowerCase());
+      if (c) DB.saveCustomer({ ...c, note });
+    }
+    success++;
+  });
+  showImportResult('Nhập khách hàng từ Excel', success, errors);
+  render();
+}
+
+async function importPurchasesFromExcel(file) {
+  let rows;
+  try {
+    rows = await readExcelRows(file);
+  } catch (err) {
+    toast('Không đọc được file: ' + err.message, true);
+    return;
+  }
+  let success = 0;
+  const errors = [];
+  rows.forEach((row, idx) => {
+    const name = fieldText(row, IMPORT_ALIASES.itemName);
+    if (!name) {
+      errors.push(`Dòng ${idx + 2}: thiếu tên mặt hàng`);
+      return;
+    }
+    const qtyRaw = getField(row, IMPORT_ALIASES.quantity);
+    const quantity = Math.round(Number(qtyRaw));
+    if (!qtyRaw || !quantity || quantity < 1) {
+      errors.push(`Dòng ${idx + 2}: số lượng không hợp lệ`);
+      return;
+    }
+    const date = parseImportDate(getField(row, IMPORT_ALIASES.date)) || todayStr();
+    const item = findOrCreateItemForImport(name, fieldText(row, IMPORT_ALIASES.barcode));
+    DB.savePurchase({
+      id: null,
+      itemId: item.id,
+      date,
+      quantity,
+      costPrice: parseMoneyInput(getField(row, IMPORT_ALIASES.costPrice)),
+      imei: fieldText(row, IMPORT_ALIASES.imei),
+      note: fieldText(row, IMPORT_ALIASES.note),
+    });
+    success++;
+  });
+  showImportResult('Nhập lịch sử NHẬP hàng từ Excel', success, errors);
+  render();
+}
+
+async function importSalesFromExcel(file) {
+  let rows;
+  try {
+    rows = await readExcelRows(file);
+  } catch (err) {
+    toast('Không đọc được file: ' + err.message, true);
+    return;
+  }
+  let success = 0;
+  const errors = [];
+  rows.forEach((row, idx) => {
+    const name = fieldText(row, IMPORT_ALIASES.itemName);
+    if (!name) {
+      errors.push(`Dòng ${idx + 2}: thiếu tên mặt hàng`);
+      return;
+    }
+    const qtyRaw = getField(row, IMPORT_ALIASES.quantity);
+    const quantity = Math.round(Number(qtyRaw));
+    if (!qtyRaw || !quantity || quantity < 1) {
+      errors.push(`Dòng ${idx + 2}: số lượng không hợp lệ`);
+      return;
+    }
+    const date = parseImportDate(getField(row, IMPORT_ALIASES.date)) || todayStr();
+    const item = findOrCreateItemForImport(name, fieldText(row, IMPORT_ALIASES.barcode));
+    const custName = fieldText(row, IMPORT_ALIASES.custName);
+    const custPhone = fieldText(row, IMPORT_ALIASES.phone);
+    const custAddress = fieldText(row, IMPORT_ALIASES.address);
+    let customerId = null;
+    if (custName) {
+      const c = findOrCreateCustomerForImport(custName, custPhone, custAddress);
+      customerId = c ? c.id : null;
+    }
+    const costBasis = item.lastCostPrice ?? item.defaultCostPrice ?? 0;
+    DB.saveSale({
+      id: null,
+      itemId: item.id,
+      customerId,
+      date,
+      quantity,
+      sellPrice: parseMoneyInput(getField(row, IMPORT_ALIASES.sellPrice)),
+      costPriceAtSale: costBasis,
+      imei: fieldText(row, IMPORT_ALIASES.imei),
+      customerName: custName,
+      customerPhone: custPhone,
+      customerAddress: custAddress,
+      note: fieldText(row, IMPORT_ALIASES.note),
+    });
+    success++;
+  });
+  showImportResult('Nhập lịch sử BÁN hàng từ Excel', success, errors);
+  render();
+}
+
+const EXCEL_IMPORTERS = {
+  items: importItemsFromExcel,
+  customers: importCustomersFromExcel,
+  purchases: importPurchasesFromExcel,
+  sales: importSalesFromExcel,
+};
+
+// ---------------------------------------------------------------------
 // SERVICE WORKER (chạy offline)
 // ---------------------------------------------------------------------
 function registerServiceWorker() {
@@ -1546,7 +1897,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=3').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=4').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
