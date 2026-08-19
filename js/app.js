@@ -229,11 +229,25 @@ function onAppClick(e) {
     'download-import-template': () => downloadExcelTemplate(t.dataset.type),
     'save-shop-info': () => {
       DB.saveShopInfo({
+        ...DB.getShopInfo(),
         name: document.getElementById('f-shop-name').value.trim(),
         phone: document.getElementById('f-shop-phone').value.trim(),
         address: document.getElementById('f-shop-address').value.trim(),
+        warranty: document.getElementById('f-shop-warranty').value.trim(),
+        bankInfo: document.getElementById('f-shop-bank-info').value.trim(),
       });
       toast('Đã lưu thông tin cửa hàng');
+    },
+    'trigger-shop-qr-upload': () => document.getElementById('f-shop-qr-file').click(),
+    'remove-shop-qr': () => {
+      if (confirmDialog('Xoá ảnh mã QR chuyển khoản?')) {
+        const info = DB.getShopInfo();
+        delete info.bankQr;
+        DB.saveShopInfo(info);
+        toast('Đã xoá mã QR');
+        const block = document.getElementById('shop-qr-block');
+        if (block) block.innerHTML = shopQrBlockHtml(info);
+      }
     },
     'cloud-save-config': () => {
       const cfg = {
@@ -1282,6 +1296,8 @@ function printInvoice(sale) {
   .total-row td { font-weight: bold; font-size: 16.5px; padding-top: 6px; }
   .footer { text-align: center; margin-top: 10px; font-size: 13px; }
   .row-line { display: flex; justify-content: space-between; gap: 8px; }
+  .warranty-box { font-size: 12.5px; line-height: 1.5; }
+  .qr-box img { border: 1px solid #ccc; border-radius: 6px; }
 </style>
 </head>
 <body>
@@ -1311,6 +1327,20 @@ function printInvoice(sale) {
   </table>
   <hr />
   ${sale.note ? `<div>Ghi chú: ${escapeHtml(sale.note)}</div>` : ''}
+  ${
+    shop.warranty
+      ? `<hr /><div class="warranty-box"><b>🛡️ Bảo hành:</b><br/>${escapeHtml(shop.warranty).replace(/\n/g, '<br/>')}</div>`
+      : ''
+  }
+  ${
+    shop.bankQr
+      ? `<hr /><div class="center qr-box">
+          <div style="font-size:12.5px;margin-bottom:4px">Quét mã để chuyển khoản</div>
+          <img src="${shop.bankQr}" style="width:140px;height:140px;object-fit:contain" />
+          ${shop.bankInfo ? `<div style="font-size:12px;margin-top:4px">${escapeHtml(shop.bankInfo)}</div>` : ''}
+        </div>`
+      : ''
+  }
   <div class="footer">Cảm ơn quý khách!</div>
 </body></html>`);
   win.document.close();
@@ -1606,6 +1636,53 @@ function submitTransactionForm() {
 // ---------------------------------------------------------------------
 // SETTINGS (Backup / Restore)
 // ---------------------------------------------------------------------
+// Đọc file ảnh, thu nhỏ về tối đa maxSize x maxSize (giữ tỉ lệ) rồi trả về
+// data URL (PNG) — tránh lưu ảnh QR gốc quá nặng vào localStorage/đồng bộ.
+function resizeImageToDataUrl(file, maxSize) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Ảnh không hợp lệ'));
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxSize || height > maxSize) {
+          const scale = Math.min(maxSize / width, maxSize / height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function shopQrBlockHtml(shop) {
+  return `
+    <div id="shop-qr-preview" style="margin-bottom:8px">
+      ${
+        shop.bankQr
+          ? `<img src="${shop.bankQr}" alt="Mã QR chuyển khoản" style="width:120px;height:120px;object-fit:contain;border:1px solid var(--border);border-radius:8px;background:#fff" />`
+          : `<div class="help-text">Chưa có ảnh QR. Chọn ảnh mã QR chuyển khoản (chụp/tải từ app ngân hàng) để tự động in ở cuối hoá đơn.</div>`
+      }
+    </div>
+    <div class="btn-row">
+      <button type="button" class="btn btn-secondary" data-action="trigger-shop-qr-upload">📷 ${shop.bankQr ? 'Đổi ảnh QR' : 'Chọn ảnh QR'}</button>
+      ${shop.bankQr ? `<button type="button" class="btn btn-danger" data-action="remove-shop-qr">Xoá QR</button>` : ''}
+    </div>
+  `;
+}
+
 function renderSettings(app) {
   const counts = {
     items: DB.getItems().length,
@@ -1639,6 +1716,19 @@ function renderSettings(app) {
       <div class="form-group">
         <label>Địa chỉ</label>
         <input type="text" id="f-shop-address" value="${escapeHtml(shop.address || '')}" placeholder="Địa chỉ cửa hàng..." />
+      </div>
+      <div class="form-group">
+        <label>Thông tin bảo hành (in ở cuối hoá đơn)</label>
+        <textarea id="f-shop-warranty" rows="3" placeholder="VD: Bảo hành 12 tháng lỗi phần cứng NSX. Không áp dụng với cháy nổ, vào nước, rơi vỡ, tự ý sửa chữa...">${escapeHtml(shop.warranty || '')}</textarea>
+      </div>
+      <div class="form-group">
+        <label>Thông tin chuyển khoản (hiện dưới mã QR)</label>
+        <input type="text" id="f-shop-bank-info" value="${escapeHtml(shop.bankInfo || '')}" placeholder="VD: MB Bank - 0123456789 - NGUYEN VAN A" />
+      </div>
+      <div class="form-group">
+        <label>Mã QR chuyển khoản (in ở cuối hoá đơn)</label>
+        <div id="shop-qr-block">${shopQrBlockHtml(shop)}</div>
+        <input type="file" id="f-shop-qr-file" accept="image/*" style="display:none" />
       </div>
       <button class="btn btn-primary" data-action="save-shop-info">Lưu thông tin cửa hàng</button>
     </div>
@@ -1681,6 +1771,26 @@ function renderSettings(app) {
     </div>
   `;
   document.getElementById('restore-file-input').addEventListener('change', handleRestoreFile);
+  document.getElementById('f-shop-qr-file').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast('Vui lòng chọn 1 file ảnh (JPG/PNG)', true);
+      return;
+    }
+    try {
+      const dataUrl = await resizeImageToDataUrl(file, 300);
+      const info = DB.getShopInfo();
+      info.bankQr = dataUrl;
+      DB.saveShopInfo(info);
+      toast('Đã lưu ảnh mã QR');
+      const block = document.getElementById('shop-qr-block');
+      if (block) block.innerHTML = shopQrBlockHtml(info);
+    } catch (err) {
+      toast('Không đọc được ảnh, thử lại nhé', true);
+    }
+  });
   IMPORT_TYPES.forEach((type) => {
     document.getElementById(`f-import-${type}`).addEventListener('change', (e) => {
       const file = e.target.files[0];
@@ -2279,7 +2389,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=10').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=11').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
