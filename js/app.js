@@ -629,7 +629,7 @@ function renderLookup(app) {
 
   app.innerHTML = `
     ${backToMoreLink()}
-    <input type="text" class="searchbox" id="lookup-search" placeholder="🔍 Nhập IMEI/số seri máy hoặc SĐT khách..." value="${escapeHtml(raw)}" />
+    <input type="text" class="searchbox" id="lookup-search" placeholder="🔍 Nhập IMEI/số seri, SĐT hoặc tên khách..." value="${escapeHtml(raw)}" />
     <div id="lookup-results"></div>
   `;
 
@@ -642,15 +642,20 @@ function renderLookup(app) {
     if (!resultsEl) return;
 
     if (!q) {
-      resultsEl.innerHTML = `<div class="empty-state">Nhập số IMEI/seri máy hoặc số điện thoại khách hàng để tra cứu nhanh lịch sử nhập/bán liên quan.</div>`;
+      resultsEl.innerHTML = `<div class="empty-state">Nhập số IMEI/seri máy, số điện thoại hoặc tên khách hàng để tra cứu nhanh lịch sử nhập/bán liên quan.</div>`;
       return;
     }
 
     const sales = DB.getSales().filter(
-      (s) => (s.imei || '').toLowerCase().includes(q) || (s.customerPhone || '').toLowerCase().includes(q)
+      (s) =>
+        (s.imei || '').toLowerCase().includes(q) ||
+        (s.customerPhone || '').toLowerCase().includes(q) ||
+        (s.customerName || '').toLowerCase().includes(q)
     );
     const purchases = DB.getPurchases().filter((p) => (p.imei || '').toLowerCase().includes(q));
-    const customers = DB.getCustomers().filter((c) => (c.phone || '').toLowerCase().includes(q));
+    const customers = DB.getCustomers().filter(
+      (c) => (c.phone || '').toLowerCase().includes(q) || (c.name || '').toLowerCase().includes(q)
+    );
 
     if (sales.length === 0 && purchases.length === 0 && customers.length === 0) {
       resultsEl.innerHTML = `<div class="empty-state">Không tìm thấy kết quả nào phù hợp với "${escapeHtml(state.lookupQuery || '')}".</div>`;
@@ -2111,7 +2116,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=6').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=7').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
