@@ -41,7 +41,7 @@ const Scanner = {
     };
 
     this._html5Qr
-      .start({ facingMode: { ideal: 'environment' } }, config, (decodedText) => {
+      .start({ facingMode: 'environment' }, config, (decodedText) => {
         this.close();
         if (typeof this._onResult === 'function') this._onResult(decodedText);
       })
