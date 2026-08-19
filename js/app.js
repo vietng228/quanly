@@ -98,6 +98,49 @@ function init() {
 
   render();
   registerServiceWorker();
+  bindCloudStatusUI();
+
+  // Đồng bộ dữ liệu mới nhất từ GitHub (nếu đã cấu hình) rồi vẽ lại màn
+  // hình — không chặn màn hình đầu tiên, dữ liệu local hiện có vẫn hiện
+  // ngay lập tức, sau đó cập nhật lại khi tải xong dữ liệu chung mới nhất.
+  if (typeof Cloud !== 'undefined') {
+    Cloud.init().then((result) => {
+      if (result && result.ok && !result.skipped) {
+        render();
+      } else if (result && result.notFound) {
+        toast('Chưa có dữ liệu chung trên GitHub — vào Cài đặt để khởi tạo đồng bộ', true);
+      }
+    });
+  }
+}
+
+// Hiện trạng thái đồng bộ GitHub (nếu có) ở đầu trang, cập nhật theo thời
+// gian thực mỗi khi Cloud đổi trạng thái (đang tải/đang đẩy lên/lỗi/xong).
+function bindCloudStatusUI() {
+  if (typeof Cloud === 'undefined') return;
+  const el = document.getElementById('cloud-status');
+  if (!el) return;
+  const messages = {
+    idle: () =>
+      Cloud._lastSyncedAt
+        ? `✅ Đã đồng bộ lúc ${new Date(Cloud._lastSyncedAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}`
+        : '',
+    pulling: () => '🔄 Đang tải dữ liệu mới nhất...',
+    pushing: () => '🔄 Đang đồng bộ lên GitHub...',
+    error: (err) => '⚠️ Lỗi đồng bộ: ' + (err || ''),
+    conflict: () => '⚠️ Có cập nhật mới, đang tải lại...',
+  };
+  function update(status, err) {
+    if (!Cloud.isConfigured()) {
+      el.textContent = '';
+      el.className = 'cloud-status';
+      return;
+    }
+    el.className = 'cloud-status ' + status;
+    el.textContent = messages[status] ? messages[status](err) : '';
+  }
+  Cloud.onStatusChange(update);
+  update(Cloud._status);
 }
 
 function setTab(tab) {
@@ -191,6 +234,69 @@ function onAppClick(e) {
         address: document.getElementById('f-shop-address').value.trim(),
       });
       toast('Đã lưu thông tin cửa hàng');
+    },
+    'cloud-save-config': () => {
+      const cfg = {
+        owner: document.getElementById('f-cloud-owner').value.trim(),
+        repo: document.getElementById('f-cloud-repo').value.trim(),
+        branch: document.getElementById('f-cloud-branch').value.trim() || 'main',
+        path: document.getElementById('f-cloud-path').value.trim() || 'data/store-data.json',
+        token: document.getElementById('f-cloud-token').value.trim(),
+      };
+      if (!cfg.owner || !cfg.repo || !cfg.token) {
+        toast('Vui lòng nhập đủ Owner, Repo, Token', true);
+        return;
+      }
+      Cloud.saveConfig(cfg);
+      toast('Đang kết nối...');
+      Cloud.pullLatest().then((result) => {
+        if (result.ok) {
+          toast('✅ Đã kết nối & đồng bộ thành công');
+          render();
+        } else if (result.notFound) {
+          if (
+            confirmDialog(
+              'Chưa có file dữ liệu trên GitHub. Khởi tạo bằng dữ liệu hiện có trên máy này? (Toàn bộ dữ liệu hiện tại trên máy sẽ trở thành bản dùng chung cho cả nhóm)'
+            )
+          ) {
+            Cloud.push('Khởi tạo dữ liệu ban đầu').then((pushResult) => {
+              if (pushResult.ok) {
+                toast('✅ Đã khởi tạo dữ liệu trên GitHub');
+              } else {
+                toast('Lỗi: ' + (pushResult.error || 'không rõ'), true);
+              }
+              render();
+            });
+          } else {
+            render();
+          }
+        } else {
+          toast('Lỗi kết nối: ' + result.error, true);
+          render();
+        }
+      });
+    },
+    'cloud-sync-now': () => {
+      toast('Đang đồng bộ...');
+      Cloud.pullLatest().then((result) => {
+        if (result.ok) {
+          toast('✅ Đã đồng bộ dữ liệu mới nhất');
+          render();
+        } else {
+          toast('Lỗi đồng bộ: ' + (result.error || 'không rõ'), true);
+        }
+      });
+    },
+    'cloud-disconnect': () => {
+      if (
+        !confirmDialog(
+          'Ngắt kết nối đồng bộ GitHub trên máy này? (Dữ liệu trên GitHub không bị xoá, chỉ máy này ngừng tự động đồng bộ)'
+        )
+      )
+        return;
+      Cloud.clearConfig();
+      toast('Đã ngắt kết nối đồng bộ');
+      render();
     },
   };
   if (actions[action]) actions[action]();
@@ -1516,6 +1622,11 @@ function renderSettings(app) {
       <p>${counts.items} mặt hàng · ${counts.purchases} lần nhập · ${counts.sales} lần bán · ${counts.transactions} khoản thu/chi · ${counts.customers} khách hàng</p>
     </div>
     <div class="settings-item">
+      <h3>☁️ Đồng bộ nhiều người dùng (GitHub riêng tư)</h3>
+      <p>Cho phép nhiều nhân viên trên nhiều máy cùng dùng chung 1 bộ dữ liệu, lưu trên 1 repository <b>private</b> riêng trên GitHub (khác với repo chứa mã nguồn app đang public). <b>Bắt buộc phải có mạng</b> khi đã bật đồng bộ. Mỗi máy cần nhập cấu hình này 1 lần.</p>
+      ${cloudSyncFormHtml()}
+    </div>
+    <div class="settings-item">
       <h3>🏪 Thông tin cửa hàng (hiện trên hoá đơn in)</h3>
       <div class="form-group">
         <label>Tên cửa hàng</label>
@@ -1579,6 +1690,50 @@ function renderSettings(app) {
   });
 }
 
+function cloudSyncFormHtml() {
+  const cfg = typeof Cloud !== 'undefined' ? Cloud.getConfig() : null;
+  const everSynced = cfg && !!localStorage.getItem(CLOUD_STATE_KEY);
+  if (cfg && everSynced) {
+    const lastSync = Cloud._lastSyncedAt
+      ? new Date(Cloud._lastSyncedAt).toLocaleString('vi-VN')
+      : 'chưa đồng bộ ở phiên làm việc này';
+    return `
+      <div class="li-sub">Đang kết nối tới: <b>${escapeHtml(cfg.owner)}/${escapeHtml(cfg.repo)}</b> (nhánh ${escapeHtml(cfg.branch || 'main')})</div>
+      <div class="li-sub">File dữ liệu: <code>${escapeHtml(cfg.path)}</code></div>
+      <div class="li-sub">Đồng bộ gần nhất: ${lastSync}</div>
+      <div class="btn-row">
+        <button class="btn btn-secondary" data-action="cloud-sync-now">🔄 Đồng bộ lại ngay</button>
+        <button class="btn btn-danger" data-action="cloud-disconnect">Ngắt kết nối</button>
+      </div>
+    `;
+  }
+  return `
+    <div class="form-group">
+      <label>Chủ tài khoản/tổ chức GitHub (owner)</label>
+      <input type="text" id="f-cloud-owner" value="${escapeHtml(cfg?.owner || '')}" placeholder="VD: vietng228" />
+    </div>
+    <div class="form-group">
+      <label>Tên repository (private)</label>
+      <input type="text" id="f-cloud-repo" value="${escapeHtml(cfg?.repo || '')}" placeholder="VD: quanly-data" />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Nhánh</label>
+        <input type="text" id="f-cloud-branch" value="${escapeHtml(cfg?.branch || 'main')}" />
+      </div>
+      <div class="form-group">
+        <label>Đường dẫn file dữ liệu</label>
+        <input type="text" id="f-cloud-path" value="${escapeHtml(cfg?.path || 'data/store-data.json')}" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Personal Access Token</label>
+      <input type="password" id="f-cloud-token" value="${escapeHtml(cfg?.token || '')}" placeholder="ghp_... hoặc github_pat_..." />
+    </div>
+    <button class="btn btn-primary" data-action="cloud-save-config">Lưu & Kết nối</button>
+  `;
+}
+
 function importRowHtml(type, label) {
   return `
     <div style="margin-bottom:14px">
@@ -1616,7 +1771,11 @@ function handleRestoreFile(e) {
       const summary = payload?.data
         ? `${(payload.data.items || []).length} mặt hàng, ${(payload.data.purchases || []).length} lần nhập, ${(payload.data.sales || []).length} lần bán, ${(payload.data.transactions || []).length} thu/chi, ${(payload.data.customers || []).length} khách hàng`
         : '';
-      if (!confirmDialog(`File backup có: ${summary}.\n\nPhục hồi sẽ THAY THẾ toàn bộ dữ liệu hiện tại. Tiếp tục?`)) return;
+      const cloudWarn =
+        typeof Cloud !== 'undefined' && Cloud.isConfigured()
+          ? '\n\n⚠️ Máy này đang đồng bộ chung với GitHub — phục hồi sẽ THAY THẾ luôn dữ liệu dùng chung của cả nhóm!'
+          : '';
+      if (!confirmDialog(`File backup có: ${summary}.\n\nPhục hồi sẽ THAY THẾ toàn bộ dữ liệu hiện tại. Tiếp tục?${cloudWarn}`)) return;
       DB.importAll(payload, 'replace');
       toast('Phục hồi dữ liệu thành công');
       render();
@@ -1630,7 +1789,11 @@ function handleRestoreFile(e) {
 }
 
 function doClearAll() {
-  if (!confirmDialog('Chắc chắn xoá TOÀN BỘ dữ liệu? Hành động này không thể hoàn tác (trừ khi bạn có file backup).')) return;
+  const cloudWarn =
+    typeof Cloud !== 'undefined' && Cloud.isConfigured()
+      ? ' Máy này đang đồng bộ chung với GitHub — xoá sẽ xoá luôn dữ liệu dùng chung của cả nhóm!'
+      : '';
+  if (!confirmDialog('Chắc chắn xoá TOÀN BỘ dữ liệu? Hành động này không thể hoàn tác (trừ khi bạn có file backup).' + cloudWarn)) return;
   if (!confirmDialog('Xác nhận lần cuối: xoá hết dữ liệu?')) return;
   DB.clearAll();
   toast('Đã xoá toàn bộ dữ liệu');
@@ -2116,7 +2279,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=7').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=8').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
