@@ -837,6 +837,43 @@ function renderItems(app) {
 // Bottom sheet hiển thị chi tiết tồn kho khi bấm vào 1 dòng mặt hàng trong
 // danh sách — gộp số liệu của tất cả bản ghi trùng tên (nếu có), và nếu có
 // hơn 1 bản ghi thì liệt kê từng bản ghi gốc kèm nút sửa/xoá riêng.
+// Tách danh sách IMEI/số seri của 1 nhóm itemId thành 2 phần: còn tồn kho
+// (chưa bán) và đã bán (kèm thông tin lần bán tương ứng để biết bán ngày
+// nào) — dùng để hiện rõ ràng ở sheet chi tiết sản phẩm, tránh nhầm lẫn giữa
+// máy còn hàng và máy đã hết khi xem ở màn hình Tồn kho.
+function getImeiBreakdownForItems(itemIds) {
+  const purchasedImeis = [];
+  DB.getPurchases()
+    .filter((p) => itemIds.includes(p.itemId))
+    .forEach((p) => {
+      (p.imei || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .forEach((im) => purchasedImeis.push(im));
+    });
+  const soldMap = new Map();
+  DB.getSales()
+    .filter((s) => itemIds.includes(s.itemId))
+    .forEach((s) => {
+      (s.imei || '')
+        .split(',')
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .forEach((im) => {
+          if (!soldMap.has(im.toLowerCase())) soldMap.set(im.toLowerCase(), s);
+        });
+    });
+  const available = [];
+  const sold = [];
+  purchasedImeis.forEach((im) => {
+    const saleRec = soldMap.get(im.toLowerCase());
+    if (saleRec) sold.push({ imei: im, sale: saleRec });
+    else available.push(im);
+  });
+  return { available, sold };
+}
+
 function openItemStockSheet(name) {
   const key = (name || '').trim().toLowerCase();
   const inv = computeInventory().filter((x) => (x.item.name || '').trim().toLowerCase() === key);
@@ -856,6 +893,37 @@ function openItemStockSheet(name) {
       : '<span class="badge ban">Còn hàng</span>';
 
   const itemIds = inv.map((x) => x.item.id);
+
+  // Danh sách IMEI/số seri — tách rõ còn tồn kho vs đã bán, để bấm vào sản
+  // phẩm ở Tồn kho là biết ngay máy nào còn máy nào hết, khỏi phải đoán.
+  const { available: availableImeis, sold: soldImeis } = getImeiBreakdownForItems(itemIds);
+  const imeiSectionHtml =
+    availableImeis.length === 0 && soldImeis.length === 0
+      ? ''
+      : `
+    <div class="section-title" style="margin-top:18px">🔢 IMEI / Số seri (${availableImeis.length + soldImeis.length})</div>
+    ${
+      availableImeis.length > 0
+        ? `<p class="help-text" style="margin:0 0 6px">✅ Còn tồn kho (${availableImeis.length}):</p>
+      <div class="chip-row" style="flex-wrap:wrap; margin-bottom:10px">
+        ${availableImeis.map((im) => `<span class="chip" style="background:#dcfce7; border-color:#16a34a; color:#15803d">${escapeHtml(im)}</span>`).join('')}
+      </div>`
+        : ''
+    }
+    ${
+      soldImeis.length > 0
+        ? `<p class="help-text" style="margin:0 0 6px">❌ Đã bán (${soldImeis.length}):</p>
+      <div class="chip-row" style="flex-wrap:wrap">
+        ${soldImeis
+          .map(
+            ({ imei, sale }) =>
+              `<span class="chip" style="background:#fee2e2; border-color:#dc2626; color:#b91c1c" title="Bán ngày ${formatDateVN(sale.date)}">${escapeHtml(imei)} · ${formatDateVN(sale.date)}</span>`
+          )
+          .join('')}
+      </div>`
+        : ''
+    }
+  `;
 
   // Giá nhập / giá bán — hiện đầy đủ cho TỪNG bản ghi gốc, không gộp/trung
   // bình dù sản phẩm bị gộp theo tên (mỗi bản ghi có thể có giá mặc định
@@ -921,6 +989,7 @@ function openItemStockSheet(name) {
           <div class="li-title">${formatDateVN(s.date)} <span class="badge ban">Bán</span></div>
           <div class="li-sub">SL ${s.quantity} × ${formatMoney(s.sellPrice)} = ${formatMoney(s.sellPrice * s.quantity)}</div>
           <div class="li-sub">Giá vốn lúc bán ${formatMoney(s.costPriceAtSale || 0)} · Lãi ${formatMoney(profit)}</div>
+          ${s.imei ? `<div class="li-sub">🔢 ${escapeHtml(s.imei)}</div>` : ''}
         </div>
         <div class="li-actions">
           <button class="icon-btn" data-action="edit-sale" data-id="${s.id}">✏️</button>
@@ -953,6 +1022,7 @@ function openItemStockSheet(name) {
         <div class="value ${totalStock <= 0 ? 'neg' : 'pos'}">${totalStock} ${stockBadge}</div>
       </div>
     </div>
+    ${imeiSectionHtml}
     <div class="section-title" style="margin-top:18px">💰 Giá nhập / giá bán${inv.length > 1 ? ` (${inv.length} bản ghi)` : ''}</div>
     ${priceRowsHtml}
     ${editDeleteBtnRow}
@@ -1071,7 +1141,7 @@ function renderInventory(app) {
                 ? '<span class="badge nhap">Sắp hết</span>'
                 : '';
             return `
-          <div class="list-item">
+          <div class="list-item" data-action="view-item-detail" data-id="${x.item.id}">
             <div class="item-icon">${categoryIcon(x.item.category)}</div>
             <div class="li-main">
               <div class="li-title">${escapeHtml(x.item.name)} ${badge}</div>
@@ -3060,7 +3130,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=16').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=17').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
