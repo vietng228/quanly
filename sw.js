@@ -1,5 +1,5 @@
 /* sw.js — service worker: cache toàn bộ app để chạy offline hoàn toàn */
-const CACHE_NAME = 'thuchi-shop-v27'; // Bump số này ở MỌI lần phát hành để buộc
+const CACHE_NAME = 'thuchi-shop-v28'; // Bump số này ở MỌI lần phát hành để buộc
 // trình duyệt xoá cache cũ và lấy bản mới — nếu quên bump, người dùng đã từng
 // mở app có thể bị kẹt ở bản cũ vĩnh viễn dù đã cập nhật code lên GitHub.
 // LƯU Ý: các ?v= bên dưới phải khớp CHÍNH XÁC với ?v= đang dùng trong
@@ -10,12 +10,12 @@ const ASSETS = [
   './',
   './index.html',
   './manifest.json',
-  './css/style.css?v=31',
-  './js/utils.js?v=31',
-  './js/db.js?v=31',
-  './js/cloud.js?v=31',
-  './js/scanner.js?v=31',
-  './js/app.js?v=31',
+  './css/style.css?v=32',
+  './js/utils.js?v=32',
+  './js/db.js?v=32',
+  './js/cloud.js?v=32',
+  './js/scanner.js?v=32',
+  './js/app.js?v=32',
   './vendor/html5-qrcode.min.js',
   './vendor/xlsx.full.min.js',
   './vendor/qrcode.js',
