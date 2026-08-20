@@ -40,6 +40,19 @@ const DB = {
     if (!barcode) return null;
     return readList(DB_KEYS.items).find((i) => i.barcode === barcode) || null;
   },
+  // Tìm mặt hàng theo mã bất kỳ quét/gõ được — khớp cả Mã vạch LẪN Mã sản
+  // phẩm, vì máy quét không phân biệt người dùng đang định quét mã nào, và
+  // nhiều shop chỉ điền 1 trong 2 trường. So khớp không phân biệt hoa/thường,
+  // bỏ khoảng trắng đầu/cuối để tránh lệch do gõ tay/khác định dạng quét.
+  getItemByCode(code) {
+    const q = String(code || '').trim().toLowerCase();
+    if (!q) return null;
+    return (
+      readList(DB_KEYS.items).find(
+        (i) => (i.barcode || '').trim().toLowerCase() === q || (i.productCode || '').trim().toLowerCase() === q
+      ) || null
+    );
+  },
   saveItem(item) {
     const list = readList(DB_KEYS.items);
     if (item.id) {

@@ -201,12 +201,12 @@ function init() {
   });
   document.getElementById('picker-scan').addEventListener('click', () => {
     Scanner.open((code) => {
-      const item = DB.getItemByBarcode(code);
+      const item = DB.getItemByCode(code);
       if (item) {
         pickerState.onSelect(item);
         closePicker();
       } else {
-        toast('Không tìm thấy mặt hàng có mã: ' + code, true);
+        toast('Không tìm thấy mặt hàng có mã vạch/mã sản phẩm: ' + code, true);
       }
     });
   });
@@ -311,6 +311,33 @@ function onAppClick(e) {
     'view-in-stock-items': openInStockItemsSheet,
     'set-purchase-period': () => { state.purchasePeriod = t.dataset.period; render(); },
     'set-sale-period': () => { state.salePeriod = t.dataset.period; render(); },
+    'scan-for-item-search': () => {
+      Scanner.open((code) => {
+        state.itemSearch = code;
+        render();
+        const found = DB.getItemByCode(code);
+        if (found) openItemStockSheet(found.name);
+        else toast('Không tìm thấy mặt hàng có mã: ' + code, true);
+      });
+    },
+    'scan-for-sale-search': () => {
+      Scanner.open((code) => {
+        state.saleSearch = code;
+        render();
+      });
+    },
+    'scan-for-purchase-search': () => {
+      Scanner.open((code) => {
+        state.purchaseSearch = code;
+        render();
+      });
+    },
+    'scan-for-lookup-search': () => {
+      Scanner.open((code) => {
+        state.lookupQuery = code;
+        render();
+      });
+    },
     'add-item': () => openItemForm(null),
     'edit-item': () => openItemForm(DB.getItem(id)),
     'delete-item': () => {
@@ -599,8 +626,14 @@ function closePicker() {
   document.getElementById('picker-modal').classList.remove('open');
 }
 function renderPickerList(filter) {
-  const items = DB.getItems().filter((i) =>
-    !filter || i.name.toLowerCase().includes(filter.toLowerCase()) || (i.barcode || '').includes(filter)
+  const q = filter.toLowerCase();
+  const items = DB.getItems().filter(
+    (i) =>
+      !filter ||
+      i.name.toLowerCase().includes(q) ||
+      (i.barcode || '').toLowerCase().includes(q) ||
+      (i.productCode || '').toLowerCase().includes(q) ||
+      (i.model || '').toLowerCase().includes(q)
   );
   const list = document.getElementById('picker-list');
   if (items.length === 0) {
@@ -614,7 +647,7 @@ function renderPickerList(filter) {
       <div class="item-icon">${categoryIcon(i.category)}</div>
       <div style="flex:1">
         <div class="li-title">${escapeHtml(i.name)}</div>
-        <div class="li-sub">${i.category ? escapeHtml(i.category) + ' · ' : ''}Nhập: ${formatMoney(i.defaultCostPrice)} · Bán: ${formatMoney(i.defaultSellPrice)}${i.barcode ? ' · Mã: ' + escapeHtml(i.barcode) : ''}</div>
+        <div class="li-sub">${i.category ? escapeHtml(i.category) + ' · ' : ''}Nhập: ${formatMoney(i.defaultCostPrice)} · Bán: ${formatMoney(i.defaultSellPrice)}${i.barcode ? ' · Mã vạch: ' + escapeHtml(i.barcode) : ''}${i.productCode ? ' · Mã SP: ' + escapeHtml(i.productCode) : ''}</div>
       </div>
     </div>`
     )
@@ -846,7 +879,10 @@ function renderItems(app) {
     .join('');
 
   app.innerHTML = `
-    <input type="text" class="searchbox" id="item-search" placeholder="🔍 Tìm mặt hàng..." value="${escapeHtml(state.itemSearch)}" />
+    <div class="input-with-btn" style="margin-bottom:12px">
+      <input type="text" class="searchbox" style="margin-bottom:0" id="item-search" placeholder="🔍 Tìm tên, mã SP, mã vạch, model..." value="${escapeHtml(state.itemSearch)}" />
+      <button type="button" data-action="scan-for-item-search">📷</button>
+    </div>
     <div class="chip-row">${chips}</div>
     <div id="items-list"></div>
     <button class="fab" data-action="add-item">+</button>
@@ -856,7 +892,15 @@ function renderItems(app) {
   // app.innerHTML — nếu không, ô input bị tạo lại mới mỗi lần gõ, làm mất
   // focus/tắt bàn phím trên điện thoại sau mỗi ký tự.
   function updateItemsList() {
-    let items = allItems.filter((i) => !state.itemSearch || i.name.toLowerCase().includes(state.itemSearch.toLowerCase()));
+    const itemSearchQ = (state.itemSearch || '').toLowerCase();
+    let items = allItems.filter(
+      (i) =>
+        !itemSearchQ ||
+        i.name.toLowerCase().includes(itemSearchQ) ||
+        (i.barcode || '').toLowerCase().includes(itemSearchQ) ||
+        (i.productCode || '').toLowerCase().includes(itemSearchQ) ||
+        (i.model || '').toLowerCase().includes(itemSearchQ)
+    );
     if (state.itemCategoryFilter !== 'all') {
       items = items.filter((i) => (i.category || 'Khác') === state.itemCategoryFilter);
     }
@@ -1425,7 +1469,10 @@ function renderLookup(app) {
 
   app.innerHTML = `
     ${backToMoreLink()}
-    <input type="text" class="searchbox" id="lookup-search" placeholder="🔍 Nhập IMEI/số seri, SĐT hoặc tên khách..." value="${escapeHtml(raw)}" />
+    <div class="input-with-btn" style="margin-bottom:12px">
+      <input type="text" class="searchbox" style="margin-bottom:0" id="lookup-search" placeholder="🔍 Mã SP, mã vạch, IMEI/số seri, SĐT hoặc tên khách..." value="${escapeHtml(raw)}" />
+      <button type="button" data-action="scan-for-lookup-search">📷</button>
+    </div>
     <div id="lookup-results"></div>
   `;
 
@@ -1442,6 +1489,13 @@ function renderLookup(app) {
       return;
     }
 
+    const items = DB.getItems().filter(
+      (i) =>
+        i.name.toLowerCase().includes(q) ||
+        (i.barcode || '').toLowerCase().includes(q) ||
+        (i.productCode || '').toLowerCase().includes(q) ||
+        (i.model || '').toLowerCase().includes(q)
+    );
     const sales = DB.getSales().filter(
       (s) =>
         (s.imei || '').toLowerCase().includes(q) ||
@@ -1453,12 +1507,37 @@ function renderLookup(app) {
       (c) => (c.phone || '').toLowerCase().includes(q) || (c.name || '').toLowerCase().includes(q)
     );
 
-    if (sales.length === 0 && purchases.length === 0 && customers.length === 0) {
+    if (items.length === 0 && sales.length === 0 && purchases.length === 0 && customers.length === 0) {
       resultsEl.innerHTML = `<div class="empty-state">Không tìm thấy kết quả nào phù hợp với "${escapeHtml(state.lookupQuery || '')}".</div>`;
       return;
     }
 
     let html = '';
+    if (items.length) {
+      // Gộp theo tên như màn Mặt hàng để 1 mặt hàng chỉ hiện 1 dòng dù có
+      // nhiều bản ghi giá nhập khác nhau — bấm vào mở thẳng sheet chi tiết
+      // mặt hàng đó (liên kết chéo sang tồn kho/lịch sử nhập-bán).
+      const seenNames = new Set();
+      const uniqueItems = items.filter((i) => {
+        const key = i.name.trim().toLowerCase();
+        if (seenNames.has(key)) return false;
+        seenNames.add(key);
+        return true;
+      });
+      html += `<div class="section-title">📦 Mặt hàng (${uniqueItems.length})</div>`;
+      html += uniqueItems
+        .map(
+          (i) => `
+        <div class="list-item" data-action="view-item-stock" data-name="${escapeHtml(i.name)}">
+          <div class="item-icon">${categoryIcon(i.category)}</div>
+          <div class="li-main">
+            <div class="li-title">${escapeHtml(i.name)}</div>
+            <div class="li-sub">${i.productCode ? '🏷️ Mã SP: ' + escapeHtml(i.productCode) + ' · ' : ''}${i.barcode ? '# ' + escapeHtml(i.barcode) : ''}</div>
+          </div>
+        </div>`
+        )
+        .join('');
+    }
     if (customers.length) {
       html += `<div class="section-title">👤 Khách hàng (${customers.length})</div>`;
       html += customers
@@ -1710,7 +1789,10 @@ function renderPurchases(app) {
   app.innerHTML = `
     ${periodTabsHtml('purchase', 'set-purchase-period')}
     ${state.purchasePeriod === 'custom' ? customRangeHtml('purchase') : ''}
-    <input type="text" class="searchbox" id="purchase-search" placeholder="🔍 Tìm theo tên mặt hàng, ghi chú, IMEI..." value="${escapeHtml(state.purchaseSearch || '')}" />
+    <div class="input-with-btn" style="margin-bottom:12px">
+      <input type="text" class="searchbox" style="margin-bottom:0" id="purchase-search" placeholder="🔍 Tìm theo tên, mã SP, mã vạch, ghi chú, IMEI..." value="${escapeHtml(state.purchaseSearch || '')}" />
+      <button type="button" data-action="scan-for-purchase-search">📷</button>
+    </div>
     <div id="purchase-summary"></div>
     <div id="stock-list"></div>
     <button class="fab" data-action="add-purchase">+</button>
@@ -1723,6 +1805,8 @@ function renderPurchases(app) {
       const item = DB.getItem(p.itemId);
       return (
         (item?.name || '').toLowerCase().includes(q) ||
+        (item?.productCode || '').toLowerCase().includes(q) ||
+        (item?.barcode || '').toLowerCase().includes(q) ||
         (p.note || '').toLowerCase().includes(q) ||
         (p.imei || '').toLowerCase().includes(q)
       );
@@ -2044,7 +2128,10 @@ function renderSales(app) {
   app.innerHTML = `
     ${periodTabsHtml('sale', 'set-sale-period')}
     ${state.salePeriod === 'custom' ? customRangeHtml('sale') : ''}
-    <input type="text" class="searchbox" id="sale-search" placeholder="🔍 Tìm theo tên mặt hàng, khách hàng, IMEI..." value="${escapeHtml(state.saleSearch || '')}" />
+    <div class="input-with-btn" style="margin-bottom:12px">
+      <input type="text" class="searchbox" style="margin-bottom:0" id="sale-search" placeholder="🔍 Tìm theo tên, mã SP, mã vạch, khách hàng, IMEI..." value="${escapeHtml(state.saleSearch || '')}" />
+      <button type="button" data-action="scan-for-sale-search">📷</button>
+    </div>
     <div id="sale-summary"></div>
     <div id="stock-list"></div>
     <button class="fab" data-action="add-sale">+</button>
@@ -2057,6 +2144,8 @@ function renderSales(app) {
       const item = DB.getItem(s.itemId);
       return (
         (item?.name || '').toLowerCase().includes(q) ||
+        (item?.productCode || '').toLowerCase().includes(q) ||
+        (item?.barcode || '').toLowerCase().includes(q) ||
         (s.customerName || '').toLowerCase().includes(q) ||
         (s.customerPhone || '').toLowerCase().includes(q) ||
         (s.imei || '').toLowerCase().includes(q)
@@ -3709,7 +3798,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=24').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=25').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
