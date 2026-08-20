@@ -361,6 +361,7 @@ function onAppClick(e) {
       if (confirmDialog('Xoá lần bán hàng này?')) { DB.deleteSale(id); toast('Đã xoá'); render(); }
     },
     'print-invoice': () => printInvoice(DB.getSales().find((s) => s.id === id)),
+    'collect-debt': () => openCollectDebtSheet(id),
     'add-customer': () => openCustomerForm(null),
     'edit-customer': () => openCustomerForm(DB.getCustomer(id)),
     'view-customer-detail': () => openCustomerDetailSheet(id),
@@ -549,6 +550,8 @@ function onSheetClick(e) {
     'edit-sale': () => openSaleForm(DB.getSales().find((s) => s.id === t.dataset.id)),
     'edit-customer': () => openCustomerForm(DB.getCustomer(t.dataset.id)),
     'print-invoice': () => printInvoice(DB.getSales().find((s) => s.id === t.dataset.id)),
+    'collect-debt': () => openCollectDebtSheet(t.dataset.id, { returnCustomerId: t.dataset.returnCustomer }),
+    'submit-collect-debt': submitCollectDebtForm,
     'delete-customer': () => {
       if (confirmDialog('Xoá khách hàng này? (Lịch sử đơn bán vẫn giữ nguyên)')) {
         DB.deleteCustomer(t.dataset.id);
@@ -762,6 +765,7 @@ function computeStats(period) {
 
 function renderDashboard(app) {
   const s = computeStats(state.period);
+  const totalDebt = computeTotalDebt(); // công nợ là số dư luỹ kế, không tính theo kỳ đang chọn
   const periodBtn = (p, label) =>
     `<button class="${state.period === p ? 'active' : ''}" data-action="set-period" data-period="${p}">${label}</button>`;
 
@@ -792,6 +796,14 @@ function renderDashboard(app) {
         <div class="label">Lợi nhuận ròng · ${s.label}</div>
         <div class="value ${s.netProfit >= 0 ? 'pos' : 'neg'}">${formatMoney(s.netProfit)}</div>
       </div>
+      ${
+        totalDebt > 0
+          ? `<div class="stat-card wide" data-action="go-tab" data-tab="customers">
+        <div class="label">💳 Tổng công nợ khách hàng (chưa thu)</div>
+        <div class="value neg">${formatMoney(totalDebt)}</div>
+      </div>`
+          : ''
+      }
       <div class="stat-card">
         <div class="label">Doanh thu bán hàng</div>
         <div class="value">${formatMoney(s.revenue)}</div>
@@ -2169,6 +2181,7 @@ function renderSales(app) {
         const items = dayRows
           .map((s) => {
             const item = DB.getItem(s.itemId);
+            const debt = getSaleDebt(s);
             return `
           <div class="list-item">
             <div class="item-icon" ${item ? `data-action="view-item-detail" data-id="${item.id}"` : ''}>${categoryIcon(item?.category)}</div>
@@ -2177,10 +2190,12 @@ function renderSales(app) {
               <div class="li-sub">SL ${s.quantity} × ${formatMoney(s.sellPrice)}</div>
               <div class="li-sub">👤 ${escapeHtml(s.customerName || 'Khách lẻ')}${s.customerPhone ? ' · ' + escapeHtml(s.customerPhone) : ''}${s.customerAddress ? ' · ' + escapeHtml(s.customerAddress) : ''}</div>
               ${s.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(s.imei)}</div>` : ''}
+              ${debt > 0 ? `<div class="li-sub">💳 Còn nợ: <b class="neg">${formatMoney(debt)}</b></div>` : ''}
             </div>
             <div class="li-right">
               <div class="li-amount">${formatMoney(s.sellPrice * s.quantity)}</div>
               <div class="li-actions">
+                ${debt > 0 ? `<button class="icon-btn" data-action="collect-debt" data-id="${s.id}">💰</button>` : ''}
                 <button class="icon-btn" data-action="print-invoice" data-id="${s.id}">🖨️</button>
                 <button class="icon-btn" data-action="edit-sale" data-id="${s.id}">✏️</button>
                 <button class="icon-btn" data-action="delete-sale" data-id="${s.id}">🗑️</button>
@@ -2201,6 +2216,33 @@ function renderSales(app) {
     updateList();
   });
   if (state.salePeriod === 'custom') wireCustomRangeInputs('sale');
+}
+
+// ---------------------------------------------------------------------
+// CÔNG NỢ (nợ khách hàng) — 1 đơn bán có thể được khách trả trước 1 phần,
+// phần còn lại ghi nhận là công nợ để theo dõi và thu sau này qua "Thu nợ".
+// Nếu sale.paidAmount chưa từng được set (đơn cũ trước khi có tính năng
+// này) thì coi như đã trả đủ, để không làm thay đổi số liệu các đơn cũ.
+// ---------------------------------------------------------------------
+function getSaleTotal(s) {
+  const subtotal = (s.sellPrice || 0) * (s.quantity || 1);
+  const discountAmount = Math.round((subtotal * (s.discountPercent || 0)) / 100);
+  return subtotal - discountAmount;
+}
+function getSalePaid(s) {
+  const total = getSaleTotal(s);
+  return s.paidAmount != null ? Math.max(0, Math.min(s.paidAmount, total)) : total;
+}
+function getSaleDebt(s) {
+  return getSaleTotal(s) - getSalePaid(s);
+}
+function computeCustomerDebt(customerId) {
+  return DB.getSales()
+    .filter((s) => s.customerId === customerId)
+    .reduce((sum, s) => sum + getSaleDebt(s), 0);
+}
+function computeTotalDebt() {
+  return DB.getSales().reduce((sum, s) => sum + getSaleDebt(s), 0);
 }
 
 function openSaleForm(s) {
@@ -2252,6 +2294,11 @@ function openSaleForm(s) {
       <label>Tiền khách đưa (tuỳ chọn, để tính tiền thừa trên hoá đơn)</label>
       <input type="number" id="f-cash-given" value="${s?.cashGiven ?? ''}" min="0" placeholder="Bỏ trống nếu không cần in tiền thừa" />
     </div>
+    <div class="form-group">
+      <label>💳 Khách đã thanh toán (công nợ)</label>
+      <input type="number" id="f-paid-amount" value="${s?.paidAmount ?? ''}" min="0" placeholder="Để trống = khách đã trả đủ" />
+      <p class="help-text" id="debt-preview" style="margin:4px 0 0"></p>
+    </div>
     <div class="section-title" style="margin-top:4px">Thông tin khách hàng</div>
     <button type="button" class="btn btn-secondary" data-action="open-customer-picker-for-sale" style="margin-bottom:12px">📇 Chọn khách đã lưu</button>
     <div class="form-group">
@@ -2280,6 +2327,28 @@ function openSaleForm(s) {
   `);
   renderSaleImeiSuggestions();
   document.getElementById('f-sale-imei').addEventListener('input', renderSaleImeiSuggestions);
+
+  // Xem trước "còn nợ" ngay khi nhập, cập nhật realtime theo SL/giá/chiết
+  // khấu/số tiền đã trả — để người bán thấy ngay số nợ trước khi lưu.
+  function updateSaleDebtPreview() {
+    const qty = Number(document.getElementById('f-qty').value) || 1;
+    const sellPrice = parseMoneyInput(document.getElementById('f-sell-price').value);
+    const discountPercent = Number(document.getElementById('f-discount-percent').value) || 0;
+    const total = getSaleTotal({ sellPrice, quantity: qty, discountPercent });
+    const paidRaw = document.getElementById('f-paid-amount').value;
+    const paid = paidRaw === '' ? total : Math.max(0, Math.min(parseMoneyInput(paidRaw), total));
+    const debt = total - paid;
+    const el = document.getElementById('debt-preview');
+    if (!el) return;
+    el.innerHTML =
+      debt > 0
+        ? `Tổng tiền đơn: ${formatMoney(total)} · Còn nợ: <b class="neg">${formatMoney(debt)}</b>`
+        : `Tổng tiền đơn: ${formatMoney(total)} · Đã trả đủ ✅`;
+  }
+  ['f-qty', 'f-sell-price', 'f-discount-percent', 'f-paid-amount'].forEach((id) => {
+    document.getElementById(id).addEventListener('input', updateSaleDebtPreview);
+  });
+  updateSaleDebtPreview();
 }
 
 function submitSaleForm() {
@@ -2354,6 +2423,10 @@ function submitSaleForm() {
     paymentMethod: document.getElementById('f-payment-method').value,
     discountPercent: Number(document.getElementById('f-discount-percent').value) || 0,
     cashGiven: document.getElementById('f-cash-given').value === '' ? null : Number(document.getElementById('f-cash-given').value),
+    paidAmount:
+      document.getElementById('f-paid-amount').value === ''
+        ? null
+        : Math.max(0, parseMoneyInput(document.getElementById('f-paid-amount').value)),
   };
   const isNewSale = !s.id;
   // Gán số hoá đơn 1 lần duy nhất khi tạo mới, giữ nguyên khi sửa lại sau này.
@@ -2407,6 +2480,8 @@ function printInvoice(sale) {
   const total = subtotal - discountAmount;
   const hasCashInfo = sale.paymentMethod !== 'Chuyển khoản' && sale.cashGiven != null && sale.cashGiven >= 0;
   const changeAmount = hasCashInfo ? Math.max(0, sale.cashGiven - total) : 0;
+  const paidAmount = getSalePaid(sale);
+  const debtAmount = getSaleDebt(sale);
   const invoiceQr = resolveInvoiceQr(shop, sale, total);
   const invoiceNo = sale.invoiceNo || ('HD' + String(DB.getSales().findIndex((x) => x.id === sale.id) + 1).padStart(6, '0'));
 
@@ -2487,6 +2562,12 @@ function printInvoice(sale) {
     <div class="row-line grand"><span>Tổng thanh toán:</span><span>${formatMoney(total)}</span></div>
     ${hasCashInfo ? `<div class="row-line"><span>Tiền khách đưa:</span><span>${formatMoney(sale.cashGiven)}</span></div>` : ''}
     ${hasCashInfo ? `<div class="row-line"><span>Tiền thừa trả khách:</span><span>${formatMoney(changeAmount)}</span></div>` : ''}
+    ${
+      debtAmount > 0
+        ? `<div class="row-line" style="margin-top:6px"><span>Đã thanh toán:</span><span>${formatMoney(paidAmount)}</span></div>
+    <div class="row-line grand"><span>CÒN NỢ LẠI:</span><span>${formatMoney(debtAmount)}</span></div>`
+        : ''
+    }
   </div>
   <div class="amount-words">(${soTienBangChu(total)} chẵn)</div>
   ${sale.note ? `<div>Ghi chú: ${escapeHtml(sale.note)}</div>` : ''}
@@ -2544,12 +2625,14 @@ function renderCustomers(app) {
         .map((c) => {
           const sales = allSales.filter((s) => s.customerId === c.id);
           const totalSpent = sales.reduce((sum, s) => sum + s.sellPrice * s.quantity, 0);
+          const debt = sales.reduce((sum, s) => sum + getSaleDebt(s), 0);
           return `
         <div class="list-item" data-action="view-customer-detail" data-id="${c.id}">
           <div class="li-main">
             <div class="li-title">${escapeHtml(c.name)}</div>
             <div class="li-sub">${escapeHtml(c.phone || '')}${c.address ? ' · ' + escapeHtml(c.address) : ''}</div>
             <div class="li-sub">${sales.length} đơn đã mua · Tổng ${formatMoney(totalSpent)}</div>
+            ${debt > 0 ? `<div class="li-sub">💳 Còn nợ: <b class="neg">${formatMoney(debt)}</b></div>` : ''}
           </div>
           <div class="li-actions">
             <button class="icon-btn" data-action="edit-customer" data-id="${c.id}">✏️</button>
@@ -2581,6 +2664,7 @@ function openCustomerDetailSheet(customerId) {
     .sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0));
   const totalSpent = sales.reduce((sum, s) => sum + s.sellPrice * s.quantity, 0);
   const totalProfit = sales.reduce((sum, s) => sum + (s.sellPrice - (s.costPriceAtSale || 0)) * s.quantity, 0);
+  const totalDebt = sales.reduce((sum, s) => sum + getSaleDebt(s), 0);
   const lastDate = sales.length ? sales[0].date : null;
 
   const salesHtml =
@@ -2591,6 +2675,7 @@ function openCustomerDetailSheet(customerId) {
             const item = DB.getItem(s.itemId);
             const total = s.sellPrice * s.quantity;
             const profit = (s.sellPrice - (s.costPriceAtSale || 0)) * s.quantity;
+            const debt = getSaleDebt(s);
             return `
       <div class="list-item">
         <div class="item-icon">${categoryIcon(item?.category)}</div>
@@ -2599,10 +2684,12 @@ function openCustomerDetailSheet(customerId) {
           <div class="li-sub">${formatDateVN(s.date)} <span class="badge ban">Bán</span></div>
           <div class="li-sub">SL ${s.quantity} × ${formatMoney(s.sellPrice)} = ${formatMoney(total)}</div>
           <div class="li-sub">Giá vốn ${formatMoney(s.costPriceAtSale || 0)} · Lãi <span class="${profit >= 0 ? 'pos' : 'neg'}">${formatMoney(profit)}</span> · ${escapeHtml(s.paymentMethod || 'Tiền mặt')}</div>
+          ${debt > 0 ? `<div class="li-sub">💳 Đã trả ${formatMoney(getSalePaid(s))} · Còn nợ <b class="neg">${formatMoney(debt)}</b></div>` : ''}
           ${s.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(s.imei)}</div>` : ''}
           ${s.note ? `<div class="li-sub">📝 ${escapeHtml(s.note)}</div>` : ''}
         </div>
         <div class="li-actions">
+          ${debt > 0 ? `<button class="icon-btn" data-action="collect-debt" data-id="${s.id}" data-return-customer="${c.id}">💰</button>` : ''}
           <button class="icon-btn" data-action="print-invoice" data-id="${s.id}">🖨️</button>
           <button class="icon-btn" data-action="edit-sale" data-id="${s.id}">✏️</button>
         </div>
@@ -2630,6 +2717,10 @@ function openCustomerDetailSheet(customerId) {
         <div class="label">Lãi mang lại cho shop</div>
         <div class="value ${totalProfit >= 0 ? 'pos' : 'neg'}">${formatMoney(totalProfit)}</div>
       </div>
+      <div class="stat-card wide">
+        <div class="label">💳 Công nợ hiện tại</div>
+        <div class="value ${totalDebt > 0 ? 'neg' : 'pos'}">${formatMoney(totalDebt)}</div>
+      </div>
       ${
         lastDate
           ? `<div class="stat-card wide">
@@ -2646,6 +2737,57 @@ function openCustomerDetailSheet(customerId) {
       <button class="btn btn-danger" data-action="delete-customer" data-id="${c.id}">🗑️ Xoá</button>
     </div>
   `);
+}
+
+// Sheet "Thu nợ" — ghi nhận khách trả thêm (1 phần hoặc hết) cho 1 đơn bán
+// còn nợ. Mặc định điền sẵn đúng số tiền còn nợ để 1 chạm là thu hết, nhưng
+// vẫn sửa được nếu khách chỉ trả thêm 1 phần nhỏ.
+function openCollectDebtSheet(saleId, opts) {
+  const s = DB.getSales().find((x) => x.id === saleId);
+  if (!s) { toast('Không tìm thấy đơn bán', true); return; }
+  const item = DB.getItem(s.itemId);
+  const total = getSaleTotal(s);
+  const paid = getSalePaid(s);
+  const debt = total - paid;
+  if (debt <= 0) { toast('Đơn này đã được thanh toán đủ', true); return; }
+  formDraft = { formType: 'collect-debt', saleId: s.id, returnCustomerId: (opts && opts.returnCustomerId) || null };
+  openSheet(`
+    <div class="sheet-title">💰 Thu nợ</div>
+    <div class="customer-block" style="margin-top:-6px">
+      <div>Khách hàng: ${escapeHtml(s.customerName || 'Khách lẻ')}${s.customerPhone ? ' · ' + escapeHtml(s.customerPhone) : ''}</div>
+      <div>Mặt hàng: ${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</div>
+    </div>
+    <div class="stat-grid" style="margin-top:14px">
+      <div class="stat-card"><div class="label">Tổng tiền đơn</div><div class="value">${formatMoney(total)}</div></div>
+      <div class="stat-card"><div class="label">Đã trả</div><div class="value pos">${formatMoney(paid)}</div></div>
+      <div class="stat-card wide"><div class="label">Còn nợ</div><div class="value neg">${formatMoney(debt)}</div></div>
+    </div>
+    <div class="form-group" style="margin-top:14px">
+      <label>Số tiền thu thêm lần này</label>
+      <input type="number" id="f-collect-amount" value="${debt}" min="0" max="${debt}" />
+      <p class="help-text">Mặc định là thu hết phần còn nợ — sửa lại nếu khách chỉ trả thêm 1 phần.</p>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" data-action="close-sheet">Huỷ</button>
+      <button class="btn btn-primary" data-action="submit-collect-debt">Xác nhận đã thu</button>
+    </div>
+  `);
+}
+
+function submitCollectDebtForm() {
+  const s = DB.getSales().find((x) => x.id === formDraft.saleId);
+  if (!s) { toast('Không tìm thấy đơn bán', true); return; }
+  const total = getSaleTotal(s);
+  const currentPaid = getSalePaid(s);
+  const amount = Math.max(0, parseMoneyInput(document.getElementById('f-collect-amount').value));
+  if (amount <= 0) { toast('Vui lòng nhập số tiền thu lớn hơn 0', true); return; }
+  const newPaid = Math.min(total, currentPaid + amount);
+  DB.saveSale({ ...s, paidAmount: newPaid });
+  toast(newPaid >= total ? '✅ Đã thu đủ, hết nợ' : 'Đã ghi nhận thu nợ 1 phần');
+  const returnCustomerId = formDraft.returnCustomerId;
+  closeSheet();
+  if (returnCustomerId) openCustomerDetailSheet(returnCustomerId);
+  else render();
 }
 
 function csvEscape(v) {
@@ -3798,7 +3940,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=25').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=26').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
