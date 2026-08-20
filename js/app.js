@@ -358,6 +358,7 @@ function onAppClick(e) {
       if (confirmDialog('Xoá lần nhập hàng này?')) { DB.deletePurchase(id); toast('Đã xoá'); render(); }
     },
     'add-sale': () => openSaleForm(null),
+    'view-sale-detail': () => openSaleDetailSheet(id),
     'edit-sale': () => openSaleForm(DB.getSales().find((s) => s.id === id)),
     'delete-sale': () => {
       if (confirmDialog('Xoá lần bán hàng này?')) { DB.deleteSale(id); toast('Đã xoá'); render(); }
@@ -910,13 +911,23 @@ function renderItems(app) {
   // focus/tắt bàn phím trên điện thoại sau mỗi ký tự.
   function updateItemsList() {
     const itemSearchQ = (state.itemSearch || '').toLowerCase();
+    // Gộp toàn bộ IMEI/số seri (cả đã nhập lẫn đã bán) theo từng mặt hàng, để
+    // tìm theo IMEI ở màn Mặt hàng cũng ra kết quả — không chỉ tìm theo
+    // tên/mã SP/mã vạch/model như trước (liên kết chéo, đồng bộ với các màn
+    // Bán hàng/Nhập hàng/Tra cứu đã hỗ trợ tìm theo IMEI từ trước).
+    const imeiByItemId = {};
+    if (itemSearchQ) {
+      DB.getPurchases().forEach((p) => { imeiByItemId[p.itemId] = (imeiByItemId[p.itemId] || '') + ' ' + (p.imei || ''); });
+      DB.getSales().forEach((s) => { imeiByItemId[s.itemId] = (imeiByItemId[s.itemId] || '') + ' ' + (s.imei || ''); });
+    }
     let items = allItems.filter(
       (i) =>
         !itemSearchQ ||
         i.name.toLowerCase().includes(itemSearchQ) ||
         (i.barcode || '').toLowerCase().includes(itemSearchQ) ||
         (i.productCode || '').toLowerCase().includes(itemSearchQ) ||
-        (i.model || '').toLowerCase().includes(itemSearchQ)
+        (i.model || '').toLowerCase().includes(itemSearchQ) ||
+        (imeiByItemId[i.id] || '').toLowerCase().includes(itemSearchQ)
     );
     if (state.itemCategoryFilter !== 'all') {
       items = items.filter((i) => (i.category || 'Khác') === state.itemCategoryFilter);
@@ -1097,6 +1108,74 @@ function openImeiDetailSheet(imei) {
     <div class="section-title" style="margin-top:14px">💵 Lịch sử bán</div>
     ${saleBlock}
     <div class="btn-row" style="margin-top:14px"><button data-action="close-sheet">Đóng</button></div>
+  `);
+}
+
+// Sheet chi tiết 1 ĐƠN BÁN cụ thể — bấm vào 1 dòng ở màn Bán hàng sẽ mở đây,
+// tập trung vào đúng thông tin của lần bán đó: người mua (tên/SĐT/địa chỉ),
+// IMEI/số seri đã bán, giá/lãi/công nợ — KHÔNG hiện lẫn toàn bộ lịch sử
+// nhập/bán của cả mặt hàng (đó là việc của sheet chi tiết mặt hàng riêng).
+function openSaleDetailSheet(saleId) {
+  const s = DB.getSales().find((x) => x.id === saleId);
+  if (!s) { toast('Không tìm thấy đơn bán này', true); return; }
+  const item = DB.getItem(s.itemId);
+  const total = s.sellPrice * s.quantity;
+  const profit = (s.sellPrice - (s.costPriceAtSale || 0)) * s.quantity;
+  const debt = getSaleDebt(s);
+  const paid = getSalePaid(s);
+  // Nếu đơn có gắn sẵn khách trong danh bạ, ưu tiên lấy thông tin MỚI NHẤT từ
+  // danh bạ (địa chỉ/SĐT có thể đã được cập nhật sau này), chỉ dùng lại dữ
+  // liệu lưu trên đơn khi khách đã bị xoá khỏi danh bạ.
+  const customer = s.customerId ? DB.getCustomer(s.customerId) : null;
+  const buyerName = customer?.name || s.customerName || 'Khách lẻ';
+  const buyerPhone = customer?.phone || s.customerPhone || '';
+  const buyerAddress = customer?.address || s.customerAddress || '';
+
+  const imeiList = (s.imei || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const imeiHtml = imeiList.length
+    ? `<div class="section-title" style="margin-top:14px">🔢 IMEI / Số seri đã bán (${imeiList.length})</div>
+    <div class="chip-row" style="flex-wrap:wrap">
+      ${imeiList.map((im) => `<span class="chip" style="background:#fee2e2; border-color:#dc2626; color:#b91c1c; cursor:pointer" data-action="view-imei-detail" data-imei="${escapeHtml(im)}">${escapeHtml(im)}</span>`).join('')}
+    </div>
+    <p class="help-text" style="margin:6px 0 0">Bấm vào 1 mã để xem đầy đủ lịch sử nhập + bán của máy đó.</p>`
+    : '';
+
+  openSheet(`
+    <div class="sheet-title">💵 Đơn bán · ${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</div>
+    <p class="help-text" style="margin-top:-8px">${formatDateVN(s.date)}${s.invoiceNo ? ' · Số HĐ: ' + escapeHtml(s.invoiceNo) : ''}</p>
+    <div class="section-title">👤 Người mua</div>
+    <div class="customer-block" style="margin-top:-6px">
+      <div>${escapeHtml(buyerName)}</div>
+      ${buyerPhone ? `<div>📞 ${escapeHtml(buyerPhone)}</div>` : ''}
+      ${buyerAddress ? `<div>📍 ${escapeHtml(buyerAddress)}</div>` : ''}
+    </div>
+    ${customer ? `<button type="button" class="btn btn-secondary" data-action="view-customer-detail" data-id="${customer.id}" style="margin-top:10px">👤 Xem đầy đủ khách hàng + lịch sử mua</button>` : ''}
+    <div class="stat-grid" style="margin-top:14px">
+      <div class="stat-card"><div class="label">Số lượng × Đơn giá</div><div class="value" style="font-size:16px">${s.quantity} × ${formatMoney(s.sellPrice)}</div></div>
+      <div class="stat-card"><div class="label">Thành tiền</div><div class="value">${formatMoney(total)}</div></div>
+      <div class="stat-card"><div class="label">Lãi</div><div class="value ${profit >= 0 ? 'pos' : 'neg'}">${formatMoney(profit)}</div></div>
+      <div class="stat-card"><div class="label">Thanh toán</div><div class="value" style="font-size:15px">${escapeHtml(s.paymentMethod || 'Tiền mặt')}</div></div>
+      ${
+        debt > 0
+          ? `<div class="stat-card wide"><div class="label">💳 Còn nợ (đã trả ${formatMoney(paid)})</div><div class="value neg">${formatMoney(debt)}</div></div>`
+          : ''
+      }
+    </div>
+    ${imeiHtml}
+    ${s.note ? `<div class="section-title" style="margin-top:14px">📝 Ghi chú</div><p class="help-text" style="margin:0">${escapeHtml(s.note)}</p>` : ''}
+    ${item ? `<div class="list-item" data-action="view-item-stock" data-name="${escapeHtml(item.name)}" style="cursor:pointer; margin-top:14px">
+      <div class="item-icon">${categoryIcon(item.category)}</div>
+      <div class="li-main">
+        <div class="li-title">${escapeHtml(item.name)}</div>
+        <div class="li-sub">Bấm để xem tồn kho / lịch sử của mặt hàng này ›</div>
+      </div>
+    </div>` : ''}
+    <div class="btn-row" style="margin-top:14px">
+      ${debt > 0 ? `<button class="btn btn-primary" data-action="collect-debt" data-id="${s.id}">💰 Thu nợ</button>` : ''}
+      <button class="btn btn-secondary" data-action="print-invoice" data-id="${s.id}">🖨️ In hoá đơn</button>
+      <button class="btn btn-secondary" data-action="edit-sale" data-id="${s.id}">✏️ Sửa</button>
+      <button class="btn btn-danger" data-action="delete-sale" data-id="${s.id}">🗑️ Xoá</button>
+    </div>
   `);
 }
 
@@ -1677,16 +1756,11 @@ function renderLookup(app) {
       html += sales
         .map((s) => {
           const item = DB.getItem(s.itemId);
-          // Bấm cả dòng để xem đầy đủ: có IMEI thì mở chi tiết IMEI (gồm cả
-          // nhập lẫn bán), không có IMEI thì mở luôn thông tin khách hàng đầy
-          // đủ nếu đơn có gắn khách, để không tap vào đâu cũng "cụt" thông tin.
-          const rowAction = s.imei
-            ? `data-action="view-imei-detail" data-imei="${escapeHtml((s.imei || '').split(',')[0].trim())}"`
-            : s.customerId
-            ? `data-action="view-customer-detail" data-id="${s.customerId}"`
-            : '';
+          // Bấm cả dòng để xem đầy đủ thông tin đơn bán này: người mua, IMEI,
+          // giá/lãi/công nợ — cùng 1 sheet chi tiết đơn bán dùng chung với
+          // màn Bán hàng, tránh mỗi nơi tap vào lại ra 1 kiểu khác nhau.
           return `
-        <div class="list-item" ${rowAction} style="${rowAction ? 'cursor:pointer' : ''}">
+        <div class="list-item" data-action="view-sale-detail" data-id="${s.id}" style="cursor:pointer">
           <div class="item-icon">${categoryIcon(item?.category)}</div>
           <div class="li-main">
             <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</div>
@@ -2305,8 +2379,8 @@ function renderSales(app) {
             const debt = getSaleDebt(s);
             return `
           <div class="list-item">
-            <div class="item-icon" ${item ? `data-action="view-item-detail" data-id="${item.id}"` : ''}>${categoryIcon(item?.category)}</div>
-            <div class="li-main" ${item ? `data-action="view-item-detail" data-id="${item.id}"` : ''}>
+            <div class="item-icon" data-action="view-sale-detail" data-id="${s.id}">${categoryIcon(item?.category)}</div>
+            <div class="li-main" data-action="view-sale-detail" data-id="${s.id}">
               <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')} <span class="badge ban">Bán</span></div>
               <div class="li-sub">SL ${s.quantity} × ${formatMoney(s.sellPrice)}</div>
               <div class="li-sub">👤 ${escapeHtml(s.customerName || 'Khách lẻ')}${s.customerPhone ? ' · ' + escapeHtml(s.customerPhone) : ''}${s.customerAddress ? ' · ' + escapeHtml(s.customerAddress) : ''}</div>
@@ -4061,7 +4135,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=27').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=28').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
