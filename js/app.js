@@ -385,6 +385,7 @@ function onAppClick(e) {
     'trigger-restore': () => document.getElementById('restore-file-input').click(),
     'do-clear-all': doClearAll,
     'do-merge-duplicates': doMergeDuplicates,
+    'do-recompute-sale-costs': doRecomputeSaleCosts,
     'share-customers': shareCustomers,
     'trigger-import': () => document.getElementById(`f-import-${t.dataset.type}`).click(),
     'download-import-template': () => downloadExcelTemplate(t.dataset.type),
@@ -866,7 +867,7 @@ function renderDashboard(app) {
             )
             .join('')
     }
-    <p class="help-text" style="margin-top:14px">* Lợi nhuận gộp tính theo giá nhập tại thời điểm bán (giá nhập gần nhất của mặt hàng khi đó).</p>
+    <p class="help-text" style="margin-top:14px">* Lợi nhuận gộp tính theo đúng giá nhập của từng máy đã bán (khớp IMEI với đúng lô nhập); hàng không theo dõi IMEI tính theo FIFO — lô nhập trước coi như bán ra trước.</p>
   `;
 
   if (state.period === 'custom') {
@@ -1569,6 +1570,106 @@ function getLatestCostPrice(itemId) {
   }
   const item = DB.getItem(itemId);
   return item?.defaultCostPrice || 0;
+}
+
+// Tính GIÁ VỐN CHÍNH XÁC cho từng lần bán của 1 mặt hàng — KHÔNG dùng "giá
+// nhập gần nhất" nữa (sai khi giá nhập biến động liên tục, không đúng với
+// chiếc/lô hàng THỰC SỰ đã bán ra). Ưu tiên 2 bước:
+//  1) Khớp đúng IMEI/số seri đã bán với đúng lô nhập có chứa IMEI đó — chính
+//     xác tuyệt đối vì mỗi máy có 1 giá nhập cụ thể, không cần đoán.
+//  2) Với số lượng không có IMEI khớp được (hàng phụ kiện không theo dõi
+//     từng máy, hoặc thiếu dữ liệu IMEI lúc nhập) — tính theo FIFO: lô nhập
+//     trước được coi là bán ra trước, đúng nguyên tắc kế toán tồn kho, và
+//     nhất quán với cách tính "Trị giá tồn" ở màn Tồn kho.
+// extraSale (tuỳ chọn): 1 đơn bán ĐANG được tạo/sửa (chưa lưu hoặc đang sửa)
+// — truyền vào để tính đúng vị trí của nó trong dòng thời gian FIFO trước
+// khi lưu, thay vì phải lưu xong mới tính lại.
+function computeFifoSaleCosts(itemId, extraSale) {
+  const lots = DB.getPurchases()
+    .filter((p) => p.itemId === itemId)
+    .map((p) => ({
+      date: p.date || '',
+      createdAt: p.createdAt || 0,
+      costPrice: p.costPrice || 0,
+      remaining: p.quantity || 0,
+      imeiSet: new Set((p.imei || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)),
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.createdAt - b.createdAt);
+
+  let sales = DB.getSales().filter((s) => s.itemId === itemId);
+  if (extraSale) {
+    sales = sales.filter((s) => s.id !== extraSale.id);
+    sales.push(extraSale);
+  }
+  sales.sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.createdAt || 0) - (b.createdAt || 0));
+
+  const costById = {};
+  sales.forEach((s) => {
+    const qty = s.quantity || 1;
+    const saleImeis = (s.imei || '').split(',').map((x) => x.trim()).filter(Boolean);
+    let totalCost = 0;
+    let matched = 0;
+    // Bước 1: khớp đúng IMEI với đúng lô chứa nó.
+    saleImeis.forEach((im) => {
+      const key = im.toLowerCase();
+      const lot = lots.find((l) => l.remaining > 0 && l.imeiSet.has(key));
+      if (lot) {
+        totalCost += lot.costPrice;
+        lot.remaining -= 1;
+        lot.imeiSet.delete(key);
+        matched += 1;
+      }
+    });
+    // Bước 2: phần còn lại lấy theo FIFO từ các lô còn hàng.
+    let remainingQty = qty - matched;
+    for (const lot of lots) {
+      if (remainingQty <= 0) break;
+      if (lot.remaining <= 0) continue;
+      const take = Math.min(remainingQty, lot.remaining);
+      totalCost += take * lot.costPrice;
+      lot.remaining -= take;
+      remainingQty -= take;
+    }
+    // Nếu vẫn thiếu lô (bán vượt tồn / thiếu dữ liệu nhập) — dùng giá nhập
+    // gần nhất đã biết làm phương án dự phòng cho phần còn thiếu, để không
+    // trả về giá vốn 0 sai lệch.
+    if (remainingQty > 0) totalCost += remainingQty * getLatestCostPrice(itemId);
+    costById[s.id] = qty > 0 ? Math.round(totalCost / qty) : 0;
+  });
+  return costById;
+}
+
+// Tính lại giá vốn cho TOÀN BỘ đơn bán đã lưu trong máy, theo phương pháp
+// IMEI-khớp-lô/FIFO ở trên — dùng cho nút "Tính lại giá vốn" ở Cài đặt, để
+// sửa luôn cả các đơn bán CŨ đã lỡ lưu giá vốn theo kiểu "giá nhập gần nhất".
+function recomputeAllSaleCosts() {
+  const itemIds = [...new Set(DB.getSales().map((s) => s.itemId))];
+  let changed = 0;
+  itemIds.forEach((itemId) => {
+    const costMap = computeFifoSaleCosts(itemId);
+    DB.getSales()
+      .filter((s) => s.itemId === itemId)
+      .forEach((s) => {
+        const newCost = costMap[s.id];
+        if (newCost != null && newCost !== s.costPriceAtSale) {
+          DB.saveSale({ ...s, costPriceAtSale: newCost });
+          changed++;
+        }
+      });
+  });
+  return changed;
+}
+
+function doRecomputeSaleCosts() {
+  if (
+    !confirmDialog(
+      'Tính lại giá vốn (giá nhập) cho TOÀN BỘ đơn bán đã lưu — ưu tiên khớp đúng IMEI với đúng lô đã nhập, phần còn lại tính theo FIFO (nhập trước bán trước), thay cho cách tính "giá nhập gần nhất" trước đây. Số lợi nhuận các kỳ trước có thể thay đổi theo đúng giá thực tế hơn. Không thể hoàn tác trừ khi phục hồi từ backup. Tiếp tục?'
+    )
+  )
+    return;
+  const changed = recomputeAllSaleCosts();
+  toast(changed > 0 ? `Đã tính lại giá vốn cho ${changed} đơn bán` : 'Giá vốn mọi đơn bán đã đúng, không có gì thay đổi');
+  render();
 }
 
 function renderInventory(app) {
@@ -2549,7 +2650,6 @@ function openSaleForm(s) {
 function submitSaleForm() {
   if (!formDraft.itemId) { toast('Vui lòng chọn mặt hàng', true); return; }
   const item = DB.getItem(formDraft.itemId);
-  const costBasis = item ? getLatestCostPrice(item.id) : 0;
 
   // Chặn cứng: không cho bán quá số lượng còn tồn kho thực tế — đây chính là
   // lỗi "hết hàng vẫn bán được" đã xảy ra do trước đây không có bước kiểm
@@ -2602,11 +2702,26 @@ function submitSaleForm() {
     }
   }
 
+  const saleDate = document.getElementById('f-date').value || todayStr();
+  // Giá vốn: khớp đúng IMEI đã bán với đúng lô nhập chứa nó, phần còn lại
+  // (không có IMEI) tính theo FIFO — xem computeFifoSaleCosts. Dựng 1 bản
+  // nháp của chính đơn đang lưu để tính đúng vị trí của nó trong dòng thời
+  // gian nhập/bán trước khi thực sự ghi xuống DB.
+  const draftSale = {
+    id: formDraft.editId || '__draft_new_sale__',
+    itemId: formDraft.itemId,
+    quantity,
+    imei: imeiRaw,
+    date: saleDate,
+    createdAt: formDraft.editId ? DB.getSales().find((x) => x.id === formDraft.editId)?.createdAt || Date.now() : Date.now(),
+  };
+  const costBasis = item ? computeFifoSaleCosts(item.id, draftSale)[draftSale.id] || 0 : 0;
+
   const s = {
     id: formDraft.editId,
     itemId: formDraft.itemId,
     customerId,
-    date: document.getElementById('f-date').value || todayStr(),
+    date: saleDate,
     quantity,
     sellPrice: parseMoneyInput(document.getElementById('f-sell-price').value),
     costPriceAtSale: costBasis,
@@ -3303,6 +3418,11 @@ function renderSettings(app) {
       <button class="btn btn-primary" data-action="do-merge-duplicates">🔗 Gộp tất cả mặt hàng trùng tên</button>
     </div>
     <div class="settings-item">
+      <h3>💰 Tính lại giá vốn theo IMEI/FIFO</h3>
+      <p>Trước đây giá vốn mỗi đơn bán lấy theo "giá nhập gần nhất" tại thời điểm bán — dễ sai khi giá nhập thay đổi liên tục và không đúng với đúng chiếc/lô đã bán ra. Bấm nút dưới để tính lại giá vốn cho TOÀN BỘ đơn bán đã lưu: máy có IMEI sẽ khớp đúng với giá nhập của đúng lô chứa IMEI đó, hàng không theo dõi IMEI sẽ tính theo FIFO (lô nhập trước tính bán trước). Số liệu lợi nhuận các kỳ trước có thể thay đổi theo giá đúng hơn.</p>
+      <button class="btn btn-primary" data-action="do-recompute-sale-costs">💰 Tính lại giá vốn toàn bộ đơn bán</button>
+    </div>
+    <div class="settings-item">
       <h3>☁️ Đồng bộ nhiều người dùng (GitHub riêng tư)</h3>
       <p>Cho phép nhiều nhân viên trên nhiều máy cùng dùng chung 1 bộ dữ liệu, lưu trên 1 repository <b>private</b> riêng trên GitHub (khác với repo chứa mã nguồn app đang public). <b>Bắt buộc phải có mạng</b> khi đã bật đồng bộ. Mỗi máy cần nhập cấu hình này 1 lần.</p>
       ${cloudSyncFormHtml()}
@@ -3991,7 +4111,15 @@ async function importSalesFromExcel(file) {
       const c = findOrCreateCustomerForImport(custName, custPhone, custAddress);
       customerId = c ? c.id : null;
     }
-    const costBasis = getLatestCostPrice(item.id);
+    const imeiText = fieldText(row, IMPORT_ALIASES.imei);
+    const costBasis = computeFifoSaleCosts(item.id, {
+      id: '__draft_import_sale__',
+      itemId: item.id,
+      quantity,
+      imei: imeiText,
+      date,
+      createdAt: Date.now(),
+    })['__draft_import_sale__'] || 0;
     DB.saveSale({
       id: null,
       itemId: item.id,
@@ -4000,7 +4128,7 @@ async function importSalesFromExcel(file) {
       quantity,
       sellPrice: parseMoneyInput(getField(row, IMPORT_ALIASES.sellPrice)),
       costPriceAtSale: costBasis,
-      imei: fieldText(row, IMPORT_ALIASES.imei),
+      imei: imeiText,
       customerName: custName,
       customerPhone: custPhone,
       customerAddress: custAddress,
@@ -4135,7 +4263,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=28').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=29').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
