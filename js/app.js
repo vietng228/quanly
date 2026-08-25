@@ -547,7 +547,28 @@ function onSheetClick(e) {
         syncImeiLinesFromDom();
         formDraft.imeiLines[idx] = code;
         renderImeiLines();
+        syncPurchaseQtyWithImei();
       });
+    },
+    // Quét liên tiếp nhiều IMEI/số seri liền nhau khi nhập hàng nhiều máy 1
+    // lúc — không cần tự tay bấm "+ Thêm dòng IMEI" hay chỉnh Số lượng
+    // trước: mỗi mã quét được sẽ tự điền vào dòng trống kế tiếp (hoặc tự
+    // thêm dòng mới nếu hết dòng trống), và Số lượng tự tăng theo đúng số
+    // IMEI đã quét — tránh trường hợp quên chỉnh Số lượng rồi quét cả loạt
+    // máy nhưng hệ thống chỉ tính có 1 sản phẩm.
+    'scan-purchase-imei-continuous': () => {
+      syncImeiLinesFromDom();
+      Scanner.open(
+        (code) => {
+          syncImeiLinesFromDom();
+          const emptyIdx = formDraft.imeiLines.findIndex((v) => !v || !v.trim());
+          if (emptyIdx >= 0) formDraft.imeiLines[emptyIdx] = code;
+          else formDraft.imeiLines.push(code);
+          renderImeiLines();
+          syncPurchaseQtyWithImei();
+        },
+        { continuous: true }
+      );
     },
     'edit-item': () => openItemForm(DB.getItem(t.dataset.id)),
     'edit-purchase': () => openPurchaseForm(DB.getPurchases().find((p) => p.id === t.dataset.id)),
@@ -2313,9 +2334,10 @@ function openPurchaseForm(p) {
     </div>
     <div class="form-group">
       <label>IMEI / Số seri từng máy (tuỳ chọn)</label>
+      <button type="button" class="btn btn-primary" data-action="scan-purchase-imei-continuous" style="margin-bottom:8px;width:100%">📷 Quét liên tiếp nhiều máy</button>
       <div id="imei-lines"></div>
       <button type="button" class="btn btn-secondary" data-action="add-purchase-imei-line" style="margin-top:2px">+ Thêm dòng IMEI</button>
-      <p class="help-text">Số dòng tự khớp theo Số lượng — mỗi dòng bấm 📷 để quét riêng cho từng máy.</p>
+      <p class="help-text">Dùng "Quét liên tiếp" để quét cả loạt máy liền nhau — Số lượng sẽ tự tăng theo đúng số IMEI đã quét, không cần tự chỉnh Số lượng trước. Hoặc bấm 📷 ở từng dòng để quét/sửa riêng 1 máy.</p>
     </div>
     <div class="form-group">
       <label>Ghi chú</label>
@@ -2333,6 +2355,27 @@ function openPurchaseForm(p) {
     while (formDraft.imeiLines.length < qty) formDraft.imeiLines.push('');
     renderImeiLines();
   });
+  // Gõ tay trực tiếp vào 1 dòng IMEI (không qua quét) cũng tự cập nhật Số
+  // lượng nếu số dòng đã điền vượt quá Số lượng đang có.
+  document.getElementById('imei-lines').addEventListener('input', (e) => {
+    if (!e.target.classList.contains('f-purchase-imei-line')) return;
+    syncImeiLinesFromDom();
+    syncPurchaseQtyWithImei();
+  });
+}
+
+// Tự tăng Số lượng cho khớp với số dòng IMEI đã có giá trị — chỉ TĂNG chứ
+// không bao giờ giảm, để không phá vỡ luồng "nhập Số lượng trước rồi quét
+// dần vào các dòng trống" (VD nhập 50 phụ kiện không theo dõi IMEI thì 50
+// dòng trống vẫn giữ nguyên Số lượng = 50 dù chưa dòng nào được điền).
+// Mục đích chính: sửa lỗi quên chỉnh Số lượng rồi quét cả loạt IMEI liền
+// nhau — quét xong bao nhiêu máy thì Số lượng tự lên bấy nhiêu.
+function syncPurchaseQtyWithImei() {
+  const qtyInput = document.getElementById('f-qty');
+  if (!qtyInput) return;
+  const filled = formDraft.imeiLines.filter((v) => v && v.trim()).length;
+  const current = Number(qtyInput.value) || 0;
+  if (filled > current) qtyInput.value = filled;
 }
 
 // Tìm các IMEI/số seri đã tồn tại ở lần nhập hàng khác trong hệ thống (không
@@ -4263,7 +4306,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=29').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=30').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
