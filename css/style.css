@@ -225,7 +225,9 @@ html, body {
 
 #scanner-reader { width: 100%; flex: 1; background: black; }
 .scanner-error { color: var(--red); padding: 12px; font-size: 13px; text-align: center; }
+.scanner-count { color: white; background: rgba(37,99,235,0.85); padding: 8px 16px; font-size: 13.5px; font-weight: 700; text-align: center; }
 .scanner-hint { color: white; background: rgba(0,0,0,0.6); padding: 10px 16px; font-size: 12.5px; text-align: center; }
+#scanner-done { margin-bottom: calc(10px + var(--safe-bottom)) !important; }
 
 /* ---------- Toast ---------- */
 .toast {
