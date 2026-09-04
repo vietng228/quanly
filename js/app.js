@@ -577,12 +577,14 @@ function onSheetClick(e) {
       syncImeiLinesFromDom();
       formDraft.imeiLines.push('');
       renderImeiLines();
+      renderReturnImeiSuggestions();
     },
     'remove-purchase-imei-line': () => {
       syncImeiLinesFromDom();
       formDraft.imeiLines.splice(Number(t.dataset.idx), 1);
       if (formDraft.imeiLines.length === 0) formDraft.imeiLines.push('');
       renderImeiLines();
+      renderReturnImeiSuggestions();
     },
     'scan-purchase-imei-line': () => {
       const idx = Number(t.dataset.idx);
@@ -591,7 +593,27 @@ function onSheetClick(e) {
         formDraft.imeiLines[idx] = code;
         renderImeiLines();
         syncPurchaseQtyWithImei();
+        renderReturnImeiSuggestions();
       });
+    },
+    // Bấm 1 chip IMEI "còn tồn kho" trong form Trả hàng nhập cho NCC — điền
+    // luôn vào dòng trống kế tiếp (hoặc thêm dòng mới nếu hết dòng trống),
+    // bấm lại chip đã chọn thì bỏ chọn — không cần quét/gõ tay từng máy.
+    'pick-return-imei': () => {
+      syncImeiLinesFromDom();
+      const imei = t.dataset.imei;
+      const idxExisting = formDraft.imeiLines.findIndex((v) => (v || '').trim().toLowerCase() === imei.toLowerCase());
+      if (idxExisting >= 0) {
+        formDraft.imeiLines.splice(idxExisting, 1);
+        if (formDraft.imeiLines.length === 0) formDraft.imeiLines.push('');
+      } else {
+        const emptyIdx = formDraft.imeiLines.findIndex((v) => !v || !v.trim());
+        if (emptyIdx >= 0) formDraft.imeiLines[emptyIdx] = imei;
+        else formDraft.imeiLines.push(imei);
+      }
+      renderImeiLines();
+      syncPurchaseQtyWithImei();
+      renderReturnImeiSuggestions();
     },
     // Quét liên tiếp nhiều IMEI/số seri liền nhau khi nhập hàng nhiều máy 1
     // lúc — không cần tự tay bấm "+ Thêm dòng IMEI" hay chỉnh Số lượng
@@ -609,6 +631,7 @@ function onSheetClick(e) {
           else formDraft.imeiLines.push(code);
           renderImeiLines();
           syncPurchaseQtyWithImei();
+          renderReturnImeiSuggestions();
         },
         { continuous: true }
       );
@@ -2424,6 +2447,7 @@ function selectFormItem(item) {
     // đúng với lô đang còn tồn hơn là giá mặc định lưu trên mặt hàng).
     const costInput = document.getElementById('f-cost-price');
     if (costInput && !costInput.value) costInput.value = getLatestCostPrice(item.id) || item.defaultCostPrice || '';
+    renderReturnImeiSuggestions();
   }
   if (formDraft.formType === 'sale') {
     const sellInput = document.getElementById('f-sell-price');
@@ -2498,6 +2522,36 @@ function renderSaleImeiSuggestions() {
       .map(
         (im) =>
           `<button type="button" class="chip ${selected.has(im.toLowerCase()) ? 'active' : ''}" data-action="pick-sale-imei" data-imei="${escapeHtml(im)}">${escapeHtml(im)}</button>`
+      )
+      .join('');
+}
+
+// Vẽ danh sách chip IMEI còn tồn kho của mặt hàng đang chọn trong form Trả
+// hàng nhập cho NCC — bấm vào 1 chip để thêm/bỏ IMEI đó vào danh sách dòng
+// IMEI đang trả, không cần quét/gõ tay từng cái (đỡ nhọc khi trả nhiều máy).
+function renderReturnImeiSuggestions() {
+  const wrap = document.getElementById('return-imei-suggestions');
+  if (!wrap) return;
+  if (!formDraft.itemId) {
+    wrap.innerHTML = '';
+    return;
+  }
+  const available = getAvailableImeisForItem(formDraft.itemId, null, formDraft.editId);
+  if (available.length === 0) {
+    wrap.innerHTML = '';
+    return;
+  }
+  const selected = new Set(
+    (formDraft.imeiLines || [])
+      .map((v) => (v || '').trim().toLowerCase())
+      .filter(Boolean)
+  );
+  wrap.innerHTML =
+    `<p class="help-text" style="width:100%; margin:6px 0 4px">📦 IMEI còn tồn kho (bấm để chọn):</p>` +
+    available
+      .map(
+        (im) =>
+          `<button type="button" class="chip ${selected.has(im.toLowerCase()) ? 'active' : ''}" data-action="pick-return-imei" data-imei="${escapeHtml(im)}">${escapeHtml(im)}</button>`
       )
       .join('');
 }
@@ -2777,7 +2831,8 @@ function openPurchaseReturnForm(r) {
       <button type="button" class="btn btn-primary" data-action="scan-purchase-imei-continuous" style="margin-bottom:8px;width:100%">📷 Quét liên tiếp nhiều máy</button>
       <div id="imei-lines"></div>
       <button type="button" class="btn btn-secondary" data-action="add-purchase-imei-line" style="margin-top:2px">+ Thêm dòng IMEI</button>
-      <p class="help-text">Chỉ chọn được IMEI đang thực sự còn tồn kho (chưa bán, chưa trả lần nào khác).</p>
+      <div id="return-imei-suggestions" class="chip-row" style="flex-wrap:wrap; margin-top:8px; margin-bottom:0"></div>
+      <p class="help-text">Chỉ chọn được IMEI đang thực sự còn tồn kho (chưa bán, chưa trả lần nào khác) — bấm thẳng vào 1 mã ở trên để chọn nhanh, không cần quét lại.</p>
     </div>
     <div class="form-group">
       <label>Lý do / Ghi chú</label>
@@ -2789,6 +2844,7 @@ function openPurchaseReturnForm(r) {
     </div>
   `);
   renderImeiLines();
+  renderReturnImeiSuggestions();
   document.getElementById('f-qty').addEventListener('input', (e) => {
     syncImeiLinesFromDom();
     const qty = Math.max(1, Number(e.target.value) || 1);
@@ -2799,6 +2855,7 @@ function openPurchaseReturnForm(r) {
     if (!e.target.classList.contains('f-purchase-imei-line')) return;
     syncImeiLinesFromDom();
     syncPurchaseQtyWithImei();
+    renderReturnImeiSuggestions();
   });
 }
 
@@ -5259,7 +5316,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=31').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=32').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
