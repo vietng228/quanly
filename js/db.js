@@ -4,6 +4,7 @@ const DB_PREFIX = 'qls_'; // quản lý shop
 const DB_KEYS = {
   items: DB_PREFIX + 'items',
   purchases: DB_PREFIX + 'purchases',
+  purchaseReturns: DB_PREFIX + 'purchase_returns',
   sales: DB_PREFIX + 'sales',
   transactions: DB_PREFIX + 'transactions',
   customers: DB_PREFIX + 'customers',
@@ -100,6 +101,28 @@ const DB = {
     writeList(DB_KEYS.purchases, readList(DB_KEYS.purchases).filter((x) => x.id !== id));
   },
 
+  // ---------- PURCHASE RETURNS (Trả hàng nhập cho NCC) ----------
+  getPurchaseReturns() {
+    return readList(DB_KEYS.purchaseReturns).sort((a, b) => b.date.localeCompare(a.date));
+  },
+  savePurchaseReturn(r) {
+    const list = readList(DB_KEYS.purchaseReturns);
+    if (r.id) {
+      const idx = list.findIndex((x) => x.id === r.id);
+      if (idx >= 0) list[idx] = r;
+      else list.push(r);
+    } else {
+      r.id = uid();
+      r.createdAt = Date.now();
+      list.push(r);
+    }
+    writeList(DB_KEYS.purchaseReturns, list);
+    return r;
+  },
+  deletePurchaseReturn(id) {
+    writeList(DB_KEYS.purchaseReturns, readList(DB_KEYS.purchaseReturns).filter((x) => x.id !== id));
+  },
+
   // ---------- SALES (Bán hàng) ----------
   getSales() {
     return readList(DB_KEYS.sales).sort((a, b) => b.date.localeCompare(a.date));
@@ -178,6 +201,7 @@ const DB = {
       data: {
         items: readList(DB_KEYS.items),
         purchases: readList(DB_KEYS.purchases),
+        purchaseReturns: readList(DB_KEYS.purchaseReturns),
         sales: readList(DB_KEYS.sales),
         transactions: readList(DB_KEYS.transactions),
         customers: readList(DB_KEYS.customers),
@@ -186,10 +210,11 @@ const DB = {
   },
   importAll(payload, mode = 'replace') {
     if (!payload || !payload.data) throw new Error('File backup không hợp lệ');
-    const { items = [], purchases = [], sales = [], transactions = [], customers = [] } = payload.data;
+    const { items = [], purchases = [], purchaseReturns = [], sales = [], transactions = [], customers = [] } = payload.data;
     if (mode === 'replace') {
       writeList(DB_KEYS.items, items);
       writeList(DB_KEYS.purchases, purchases);
+      writeList(DB_KEYS.purchaseReturns, purchaseReturns);
       writeList(DB_KEYS.sales, sales);
       writeList(DB_KEYS.transactions, transactions);
       writeList(DB_KEYS.customers, customers);
@@ -205,6 +230,7 @@ const DB = {
       };
       mergeIn(DB_KEYS.items, items);
       mergeIn(DB_KEYS.purchases, purchases);
+      mergeIn(DB_KEYS.purchaseReturns, purchaseReturns);
       mergeIn(DB_KEYS.sales, sales);
       mergeIn(DB_KEYS.transactions, transactions);
       mergeIn(DB_KEYS.customers, customers);
@@ -213,6 +239,7 @@ const DB = {
   clearAll() {
     writeList(DB_KEYS.items, []);
     writeList(DB_KEYS.purchases, []);
+    writeList(DB_KEYS.purchaseReturns, []);
     writeList(DB_KEYS.sales, []);
     writeList(DB_KEYS.transactions, []);
     writeList(DB_KEYS.customers, []);

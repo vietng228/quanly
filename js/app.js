@@ -357,6 +357,11 @@ function onAppClick(e) {
     'delete-purchase': () => {
       if (confirmDialog('Xoá lần nhập hàng này?')) { DB.deletePurchase(id); toast('Đã xoá'); render(); }
     },
+    'add-purchase-return': () => openPurchaseReturnForm(null),
+    'edit-purchase-return': () => openPurchaseReturnForm(DB.getPurchaseReturns().find((r) => r.id === id)),
+    'delete-purchase-return': () => {
+      if (confirmDialog('Xoá lần trả hàng NCC này?')) { DB.deletePurchaseReturn(id); toast('Đã xoá'); render(); }
+    },
     'add-sale': () => openSaleForm(null),
     'view-sale-detail': () => openSaleDetailSheet(id),
     'edit-sale': () => openSaleForm(DB.getSales().find((s) => s.id === id)),
@@ -530,6 +535,44 @@ function onSheetClick(e) {
       input.value = current.join(', ');
       renderSaleImeiSuggestions();
     },
+    // ----- Đơn bán nhiều sản phẩm (mỗi dòng 1 sản phẩm, xem openNewSaleOrderForm) -----
+    'open-item-picker-for-sale-line': () => {
+      const idx = Number(t.dataset.idx);
+      openPicker((item) => selectSaleLineItem(idx, item));
+    },
+    'scan-for-sale-line-imei': () => {
+      const idx = Number(t.dataset.idx);
+      Scanner.open((code) => {
+        syncSaleLinesFromDom();
+        formDraft.lines[idx].imei = code;
+        renderSaleLines();
+      });
+    },
+    'pick-sale-line-imei': () => {
+      const idx = Number(t.dataset.idx);
+      syncSaleLinesFromDom();
+      const line = formDraft.lines[idx];
+      if (!line) return;
+      const current = (line.imei || '').split(',').map((s) => s.trim()).filter(Boolean);
+      const imei = t.dataset.imei;
+      const iidx = current.findIndex((x) => x.toLowerCase() === imei.toLowerCase());
+      if (iidx >= 0) current.splice(iidx, 1);
+      else current.push(imei);
+      line.imei = current.join(', ');
+      renderSaleLines();
+    },
+    'add-sale-line': () => {
+      syncSaleLinesFromDom();
+      formDraft.lines.push({ itemId: null, qty: 1, sellPrice: '', imei: '' });
+      renderSaleLines();
+    },
+    'remove-sale-line': () => {
+      syncSaleLinesFromDom();
+      formDraft.lines.splice(Number(t.dataset.idx), 1);
+      if (formDraft.lines.length === 0) formDraft.lines.push({ itemId: null, qty: 1, sellPrice: '', imei: '' });
+      renderSaleLines();
+    },
+    'view-sale-detail': () => openSaleDetailSheet(t.dataset.id),
     'add-purchase-imei-line': () => {
       syncImeiLinesFromDom();
       formDraft.imeiLines.push('');
@@ -572,6 +615,7 @@ function onSheetClick(e) {
     },
     'edit-item': () => openItemForm(DB.getItem(t.dataset.id)),
     'edit-purchase': () => openPurchaseForm(DB.getPurchases().find((p) => p.id === t.dataset.id)),
+    'edit-purchase-return': () => openPurchaseReturnForm(DB.getPurchaseReturns().find((r) => r.id === t.dataset.id)),
     'edit-sale': () => openSaleForm(DB.getSales().find((s) => s.id === t.dataset.id)),
     'edit-customer': () => openCustomerForm(DB.getCustomer(t.dataset.id)),
     'print-invoice': () => printInvoice(DB.getSales().find((s) => s.id === t.dataset.id)),
@@ -623,6 +667,16 @@ function onSheetClick(e) {
         if (p) openItemStockSheetById(p.itemId);
       }
     },
+    'delete-purchase-return': () => {
+      if (confirmDialog('Xoá lần trả hàng NCC này? (Số lượng sẽ cộng lại vào tồn kho)')) {
+        const r = DB.getPurchaseReturns().find((x) => x.id === t.dataset.id);
+        DB.deletePurchaseReturn(t.dataset.id);
+        toast('Đã xoá lần trả hàng NCC');
+        closeSheet();
+        render();
+        if (r) openItemStockSheetById(r.itemId);
+      }
+    },
     'delete-sale': () => {
       if (confirmDialog('Xoá lần bán hàng này?')) {
         const s = DB.getSales().find((x) => x.id === t.dataset.id);
@@ -635,7 +689,9 @@ function onSheetClick(e) {
     },
     'submit-item-form': submitItemForm,
     'submit-purchase-form': submitPurchaseForm,
+    'submit-purchase-return-form': submitPurchaseReturnForm,
     'submit-sale-form': submitSaleForm,
+    'submit-new-sale-order': submitNewSaleOrderForm,
     'submit-customer-form': submitCustomerForm,
     'submit-transaction-form': submitTransactionForm,
     'set-tx-type': () => { formDraft.txType = t.dataset.type; refreshTxTypeUI(); },
@@ -989,7 +1045,8 @@ function renderItems(app) {
               const merged = groupItems.length > 1;
               const purchased = groupItems.reduce((sum, i) => sum + (invByItemId[i.id]?.purchased || 0), 0);
               const sold = groupItems.reduce((sum, i) => sum + (invByItemId[i.id]?.sold || 0), 0);
-              const stock = purchased - sold;
+              const returned = groupItems.reduce((sum, i) => sum + (invByItemId[i.id]?.returned || 0), 0);
+              const stock = purchased - sold - returned;
               const stockBadge =
                 stock <= 0
                   ? '<span class="badge chi">Hết hàng</span>'
@@ -1060,14 +1117,29 @@ function getImeiBreakdownForItems(itemIds) {
           if (!soldMap.has(im.toLowerCase())) soldMap.set(im.toLowerCase(), s);
         });
     });
+  const returnedMap = new Map();
+  DB.getPurchaseReturns()
+    .filter((r) => itemIds.includes(r.itemId))
+    .forEach((r) => {
+      (r.imei || '')
+        .split(',')
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .forEach((im) => {
+          if (!returnedMap.has(im.toLowerCase())) returnedMap.set(im.toLowerCase(), r);
+        });
+    });
   const available = [];
   const sold = [];
+  const returned = [];
   purchasedImeis.forEach((im) => {
     const saleRec = soldMap.get(im.toLowerCase());
+    const retRec = returnedMap.get(im.toLowerCase());
     if (saleRec) sold.push({ imei: im, sale: saleRec });
+    else if (retRec) returned.push({ imei: im, ret: retRec });
     else available.push(im);
   });
-  return { available, sold };
+  return { available, sold, returned };
 }
 
 // Sheet chi tiết 1 IMEI/số seri cụ thể — bấm vào bất kỳ đâu hiện mã này
@@ -1081,8 +1153,9 @@ function openImeiDetailSheet(imei) {
   const matchImei = (raw) => (raw || '').split(',').map((s) => s.trim().toLowerCase()).includes(q);
   const purchase = DB.getPurchases().find((p) => matchImei(p.imei));
   const sale = DB.getSales().find((s) => matchImei(s.imei));
-  if (!purchase && !sale) { toast('Không tìm thấy lịch sử nhập/bán cho mã: ' + imei, true); return; }
-  const item = DB.getItem((purchase || sale).itemId);
+  const ret = DB.getPurchaseReturns().find((r) => matchImei(r.imei));
+  if (!purchase && !sale && !ret) { toast('Không tìm thấy lịch sử nhập/bán cho mã: ' + imei, true); return; }
+  const item = DB.getItem((purchase || sale || ret).itemId);
 
   const purchaseBlock = purchase
     ? `<div class="list-item">
@@ -1114,7 +1187,21 @@ function openImeiDetailSheet(imei) {
         </div>
       </div>`;
       })()
+    : ret
+    ? `<div class="empty-state" style="padding:16px">↩️ Máy này đã trả lại nhà cung cấp ngày ${formatDateVN(ret.date)}, không còn ở cửa hàng.</div>`
     : '<div class="empty-state" style="padding:16px">✅ Máy này còn tồn kho, chưa bán.</div>';
+
+  const returnBlock = ret
+    ? `<div class="list-item">
+        <div class="li-main">
+          <div class="li-title">${formatDateVN(ret.date)} <span class="badge tra">Trả NCC</span></div>
+          <div class="li-sub">Giá hoàn ${formatMoney(ret.costPrice)}${ret.note ? ' · ' + escapeHtml(ret.note) : ''}</div>
+        </div>
+        <div class="li-actions">
+          <button class="icon-btn" data-action="edit-purchase-return" data-id="${ret.id}">✏️</button>
+        </div>
+      </div>`
+    : '';
 
   openSheet(`
     <div class="sheet-title">🔢 IMEI: ${escapeHtml(imei)}</div>
@@ -1129,6 +1216,7 @@ function openImeiDetailSheet(imei) {
     ${purchaseBlock}
     <div class="section-title" style="margin-top:14px">💵 Lịch sử bán</div>
     ${saleBlock}
+    ${ret ? `<div class="section-title" style="margin-top:14px">↩️ Lịch sử trả NCC</div>${returnBlock}` : ''}
     <div class="btn-row" style="margin-top:14px"><button data-action="close-sheet">Đóng</button></div>
   `);
 }
@@ -1162,6 +1250,32 @@ function openSaleDetailSheet(saleId) {
     <p class="help-text" style="margin:6px 0 0">Bấm vào 1 mã để xem đầy đủ lịch sử nhập + bán của máy đó.</p>`
     : '';
 
+  // Đơn bán nhiều sản phẩm (cùng orderId, tạo từ "Bán hàng mới") — liệt kê
+  // các sản phẩm KHÁC trong cùng đơn để người dùng biết đây là 1 phần của
+  // hoá đơn lớn hơn, có thể bấm xem/sửa từng sản phẩm hoặc in gộp cả đơn.
+  const orderSiblings = s.orderId
+    ? DB.getSales()
+        .filter((x) => x.orderId === s.orderId && x.id !== s.id)
+        .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+    : [];
+  const orderSiblingsHtml = orderSiblings.length
+    ? `
+    <div class="section-title" style="margin-top:14px">🧾 Đơn hàng gồm ${orderSiblings.length + 1} sản phẩm</div>
+    ${orderSiblings
+      .map((x) => {
+        const xi = DB.getItem(x.itemId);
+        return `<div class="list-item" data-action="view-sale-detail" data-id="${x.id}" style="cursor:pointer">
+      <div class="li-main">
+        <div class="li-title">${escapeHtml(xi ? xi.name : '(Mặt hàng đã xoá)')}</div>
+        <div class="li-sub">${x.quantity} × ${formatMoney(x.sellPrice)}</div>
+      </div>
+      <div class="li-amount">${formatMoney(getSaleTotal(x))}</div>
+    </div>`;
+      })
+      .join('')}
+    <p class="help-text" style="margin:2px 0 0">Đây là hoá đơn gồm nhiều sản phẩm — bấm "In hoá đơn" để in gộp đủ tất cả sản phẩm trên cùng 1 tờ.</p>`
+    : '';
+
   openSheet(`
     <div class="sheet-title">💵 Đơn bán · ${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</div>
     <p class="help-text" style="margin-top:-8px">${formatDateVN(s.date)}${s.invoiceNo ? ' · Số HĐ: ' + escapeHtml(s.invoiceNo) : ''}</p>
@@ -1184,6 +1298,7 @@ function openSaleDetailSheet(saleId) {
       }
     </div>
     ${imeiHtml}
+    ${orderSiblingsHtml}
     ${s.note ? `<div class="section-title" style="margin-top:14px">📝 Ghi chú</div><p class="help-text" style="margin:0">${escapeHtml(s.note)}</p>` : ''}
     ${item ? `<div class="list-item" data-action="view-item-stock" data-name="${escapeHtml(item.name)}" style="cursor:pointer; margin-top:14px">
       <div class="item-icon">${categoryIcon(item.category)}</div>
@@ -1286,7 +1401,8 @@ function openItemStockSheet(name) {
   const first = inv[0].item;
   const totalPurchased = inv.reduce((s, x) => s + x.purchased, 0);
   const totalSold = inv.reduce((s, x) => s + x.sold, 0);
-  const totalStock = totalPurchased - totalSold;
+  const totalReturned = inv.reduce((s, x) => s + (x.returned || 0), 0);
+  const totalStock = totalPurchased - totalSold - totalReturned;
   const stockBadge =
     totalStock <= 0
       ? '<span class="badge chi">Hết hàng</span>'
@@ -1298,12 +1414,12 @@ function openItemStockSheet(name) {
 
   // Danh sách IMEI/số seri — tách rõ còn tồn kho vs đã bán, để bấm vào sản
   // phẩm ở Tồn kho là biết ngay máy nào còn máy nào hết, khỏi phải đoán.
-  const { available: availableImeis, sold: soldImeis } = getImeiBreakdownForItems(itemIds);
+  const { available: availableImeis, sold: soldImeis, returned: returnedImeis } = getImeiBreakdownForItems(itemIds);
   const imeiSectionHtml =
-    availableImeis.length === 0 && soldImeis.length === 0
+    availableImeis.length === 0 && soldImeis.length === 0 && returnedImeis.length === 0
       ? ''
       : `
-    <div class="section-title" style="margin-top:18px">🔢 IMEI / Số seri (${availableImeis.length + soldImeis.length})</div>
+    <div class="section-title" style="margin-top:18px">🔢 IMEI / Số seri (${availableImeis.length + soldImeis.length + returnedImeis.length})</div>
     ${
       availableImeis.length > 0
         ? `<p class="help-text" style="margin:0 0 6px">✅ Còn tồn kho (${availableImeis.length}) — bấm vào 1 mã để xem lịch sử nhập:</p>
@@ -1315,11 +1431,24 @@ function openItemStockSheet(name) {
     ${
       soldImeis.length > 0
         ? `<p class="help-text" style="margin:0 0 6px">❌ Đã bán (${soldImeis.length}) — bấm vào 1 mã để xem lịch sử nhập + bán:</p>
-      <div class="chip-row" style="flex-wrap:wrap">
+      <div class="chip-row" style="flex-wrap:wrap; margin-bottom:${returnedImeis.length > 0 ? '10px' : '0'}">
         ${soldImeis
           .map(
             ({ imei, sale }) =>
               `<span class="chip" style="background:#fee2e2; border-color:#dc2626; color:#b91c1c; cursor:pointer" data-action="view-imei-detail" data-imei="${escapeHtml(imei)}" title="Bán ngày ${formatDateVN(sale.date)}">${escapeHtml(imei)} · ${formatDateVN(sale.date)}</span>`
+          )
+          .join('')}
+      </div>`
+        : ''
+    }
+    ${
+      returnedImeis.length > 0
+        ? `<p class="help-text" style="margin:0 0 6px">↩️ Đã trả NCC (${returnedImeis.length}) — bấm vào 1 mã để xem lịch sử nhập + trả:</p>
+      <div class="chip-row" style="flex-wrap:wrap">
+        ${returnedImeis
+          .map(
+            ({ imei, ret }) =>
+              `<span class="chip" style="background:#ffedd5; border-color:#ea580c; color:#c2410c; cursor:pointer" data-action="view-imei-detail" data-imei="${escapeHtml(imei)}" title="Trả NCC ngày ${formatDateVN(ret.date)}">${escapeHtml(imei)} · ${formatDateVN(ret.date)}</span>`
           )
           .join('')}
       </div>`
@@ -1333,14 +1462,14 @@ function openItemStockSheet(name) {
   const priceRowsHtml = inv
     .map((x) => {
       const i = x.item;
-      const st = x.purchased - x.sold;
+      const st = x.purchased - x.sold - (x.returned || 0);
       return `
       <div class="list-item">
         <div class="item-icon">${categoryIcon(i.category)}</div>
         <div class="li-main">
           <div class="li-title">${escapeHtml(i.category || 'Khác')}${i.barcode ? ' · #' + escapeHtml(i.barcode) : ''}</div>
           <div class="li-sub">Giá nhập ${formatMoney(i.defaultCostPrice)} · Giá bán ${formatMoney(i.defaultSellPrice)}</div>
-          <div class="li-sub">Đã nhập ${x.purchased} · Đã bán ${x.sold} · Tồn ${st}</div>
+          <div class="li-sub">Đã nhập ${x.purchased} · Đã bán ${x.sold}${x.returned > 0 ? ' · Trả NCC ' + x.returned : ''} · Tồn ${st}</div>
         </div>
         <div class="li-actions">
           <button class="icon-btn" data-action="edit-item" data-id="${i.id}">✏️</button>
@@ -1402,6 +1531,31 @@ function openItemStockSheet(name) {
           })
           .join('');
 
+  // Lịch sử trả hàng nhập cho nhà cung cấp.
+  const returnHistory = DB.getPurchaseReturns()
+    .filter((r) => itemIds.includes(r.itemId))
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const returnHistoryHtml =
+    returnHistory.length === 0
+      ? ''
+      : `<div class="section-title" style="margin-top:18px">↩️ Lịch sử trả hàng NCC (${returnHistory.length})</div>
+    ${returnHistory
+      .map(
+        (r) => `
+      <div class="list-item">
+        <div class="li-main">
+          <div class="li-title">${formatDateVN(r.date)} <span class="badge tra">Trả NCC</span></div>
+          <div class="li-sub">SL ${r.quantity} × ${formatMoney(r.costPrice)} = ${formatMoney(r.costPrice * r.quantity)}${r.note ? ' · ' + escapeHtml(r.note) : ''}</div>
+          ${r.imei ? `<div class="li-sub">🔢 ${escapeHtml(r.imei)}</div>` : ''}
+        </div>
+        <div class="li-actions">
+          <button class="icon-btn" data-action="edit-purchase-return" data-id="${r.id}">✏️</button>
+          <button class="icon-btn" data-action="delete-purchase-return" data-id="${r.id}">🗑️</button>
+        </div>
+      </div>`
+      )
+      .join('')}`;
+
   const editDeleteBtnRow =
     inv.length === 1
       ? `<div class="btn-row">
@@ -1428,6 +1582,11 @@ function openItemStockSheet(name) {
         <div class="label">Đã bán</div>
         <div class="value">${totalSold}</div>
       </div>
+      ${
+        totalReturned > 0
+          ? `<div class="stat-card"><div class="label">↩️ Trả NCC</div><div class="value">${totalReturned}</div></div>`
+          : ''
+      }
       <div class="stat-card wide">
         <div class="label">Tồn kho hiện tại</div>
         <div class="value ${totalStock <= 0 ? 'neg' : 'pos'}">${totalStock} ${stockBadge}</div>
@@ -1441,6 +1600,7 @@ function openItemStockSheet(name) {
     ${purchaseHistoryHtml}
     <div class="section-title" style="margin-top:18px">💵 Lịch sử bán hàng (${saleHistory.length})</div>
     ${saleHistoryHtml}
+    ${returnHistoryHtml}
     <div class="btn-row" style="margin-top:18px">
       <button class="btn btn-secondary" data-action="close-sheet">Đóng</button>
     </div>
@@ -1474,9 +1634,14 @@ function computeInventory() {
   DB.getSales().forEach((s) => {
     soldByItem[s.itemId] = (soldByItem[s.itemId] || 0) + s.quantity;
   });
+  // Hàng trả lại nhà cung cấp cũng rời khỏi tồn kho giống như hàng đã bán.
+  const returnedByItem = {};
+  DB.getPurchaseReturns().forEach((r) => {
+    returnedByItem[r.itemId] = (returnedByItem[r.itemId] || 0) + r.quantity;
+  });
   // Giá trị tồn kho hiện tại: tính theo FIFO trên đúng giá nhập của từng lô
-  // (trừ dần số đã bán từ lô nhập cũ nhất trước) — KHÔNG chia bình quân giá,
-  // giữ đúng nguyên tắc "giá nhập cố định theo từng lần nhập" của cửa hàng.
+  // (trừ dần số đã bán + đã trả NCC từ lô nhập cũ nhất trước) — KHÔNG chia
+  // bình quân giá, giữ đúng nguyên tắc "giá nhập cố định theo từng lần nhập".
   const purchasesByItem = {};
   DB.getPurchases().forEach((p) => {
     (purchasesByItem[p.itemId] = purchasesByItem[p.itemId] || []).push(p);
@@ -1484,13 +1649,14 @@ function computeInventory() {
   return items.map((item) => {
     const purchased = purchasedByItem[item.id] || 0;
     const sold = soldByItem[item.id] || 0;
-    const stock = purchased - sold;
+    const returned = returnedByItem[item.id] || 0;
+    const stock = purchased - sold - returned;
     let stockValue = 0;
     if (stock > 0) {
       const lots = (purchasesByItem[item.id] || [])
         .slice()
         .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.createdAt || 0) - (b.createdAt || 0));
-      let toSkip = sold;
+      let toSkip = sold + returned;
       lots.forEach((p) => {
         let qty = p.quantity;
         if (toSkip > 0) {
@@ -1501,7 +1667,7 @@ function computeInventory() {
         if (qty > 0) stockValue += qty * (p.costPrice || 0);
       });
     }
-    return { item, purchased, sold, stock, stockValue };
+    return { item, purchased, sold, returned, stock, stockValue };
   });
 }
 
@@ -1622,16 +1788,25 @@ function computeFifoSaleCosts(itemId, extraSale) {
     sales = sales.filter((s) => s.id !== extraSale.id);
     sales.push(extraSale);
   }
-  sales.sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.createdAt || 0) - (b.createdAt || 0));
+
+  // Trả hàng NCC cũng lấy mất 1 đơn vị khỏi đúng lô nhập của nó — phải gộp
+  // chung vào dòng thời gian tiêu thụ lô với bán hàng (sắp đúng theo ngày xảy
+  // ra), nếu không hàng đã trả NCC vẫn bị coi là "còn trong lô" và có thể bị
+  // tính nhầm vào giá vốn của 1 đơn bán khác diễn ra sau đó.
+  const returns = DB.getPurchaseReturns().filter((r) => r.itemId === itemId);
+  const events = [
+    ...sales.map((s) => ({ kind: 'sale', ref: s, date: s.date || '', createdAt: s.createdAt || 0, quantity: s.quantity || 1, imei: s.imei })),
+    ...returns.map((r) => ({ kind: 'return', ref: r, date: r.date || '', createdAt: r.createdAt || 0, quantity: r.quantity || 1, imei: r.imei })),
+  ].sort((a, b) => a.date.localeCompare(b.date) || a.createdAt - b.createdAt);
 
   const costById = {};
-  sales.forEach((s) => {
-    const qty = s.quantity || 1;
-    const saleImeis = (s.imei || '').split(',').map((x) => x.trim()).filter(Boolean);
+  events.forEach((ev) => {
+    const qty = ev.quantity || 1;
+    const evImeis = (ev.imei || '').split(',').map((x) => x.trim()).filter(Boolean);
     let totalCost = 0;
     let matched = 0;
     // Bước 1: khớp đúng IMEI với đúng lô chứa nó.
-    saleImeis.forEach((im) => {
+    evImeis.forEach((im) => {
       const key = im.toLowerCase();
       const lot = lots.find((l) => l.remaining > 0 && l.imeiSet.has(key));
       if (lot) {
@@ -1651,11 +1826,12 @@ function computeFifoSaleCosts(itemId, extraSale) {
       lot.remaining -= take;
       remainingQty -= take;
     }
+    if (ev.kind === 'return') return; // chỉ cần tiêu thụ lô, không tính giá vốn bán
     // Nếu vẫn thiếu lô (bán vượt tồn / thiếu dữ liệu nhập) — dùng giá nhập
     // gần nhất đã biết làm phương án dự phòng cho phần còn thiếu, để không
     // trả về giá vốn 0 sai lệch.
     if (remainingQty > 0) totalCost += remainingQty * getLatestCostPrice(itemId);
-    costById[s.id] = qty > 0 ? Math.round(totalCost / qty) : 0;
+    costById[ev.ref.id] = qty > 0 ? Math.round(totalCost / qty) : 0;
   });
   return costById;
 }
@@ -1760,7 +1936,7 @@ function renderInventory(app) {
             <div class="item-icon">${categoryIcon(x.item.category)}</div>
             <div class="li-main">
               <div class="li-title">${escapeHtml(x.item.name)} ${badge}</div>
-              <div class="li-sub">Đã nhập ${x.purchased} · Đã bán ${x.sold}${x.stock > 0 ? ' · Trị giá tồn ' + formatMoney(x.stockValue) : ''}</div>
+              <div class="li-sub">Đã nhập ${x.purchased} · Đã bán ${x.sold}${x.returned > 0 ? ' · Trả NCC ' + x.returned : ''}${x.stock > 0 ? ' · Trị giá tồn ' + formatMoney(x.stockValue) : ''}</div>
             </div>
             <div class="li-main" style="flex:0">
               <div class="li-amount ${x.stock <= 0 ? 'neg' : ''}">${x.stock} ${escapeHtml(x.item.unit || '')}</div>
@@ -1823,11 +1999,12 @@ function renderLookup(app) {
         (s.customerName || '').toLowerCase().includes(q)
     );
     const purchases = DB.getPurchases().filter((p) => (p.imei || '').toLowerCase().includes(q));
+    const returns = DB.getPurchaseReturns().filter((r) => (r.imei || '').toLowerCase().includes(q));
     const customers = DB.getCustomers().filter(
       (c) => (c.phone || '').toLowerCase().includes(q) || (c.name || '').toLowerCase().includes(q)
     );
 
-    if (items.length === 0 && sales.length === 0 && purchases.length === 0 && customers.length === 0) {
+    if (items.length === 0 && sales.length === 0 && purchases.length === 0 && returns.length === 0 && customers.length === 0) {
       resultsEl.innerHTML = `<div class="empty-state">Không tìm thấy kết quả nào phù hợp với "${escapeHtml(state.lookupQuery || '')}".</div>`;
       return;
     }
@@ -1914,6 +2091,28 @@ function renderLookup(app) {
             <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</div>
             <div class="li-sub">${formatDateVN(p.date)} · SL ${p.quantity} × ${formatMoney(p.costPrice)}</div>
             ${p.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(p.imei)}</div>` : ''}
+          </div>
+        </div>`;
+        })
+        .join('');
+    }
+    if (returns.length) {
+      html += `<div class="section-title">↩️ Lần trả NCC liên quan (${returns.length})</div>`;
+      html += returns
+        .map((r) => {
+          const item = DB.getItem(r.itemId);
+          const rowAction = r.imei
+            ? `data-action="view-imei-detail" data-imei="${escapeHtml((r.imei || '').split(',')[0].trim())}"`
+            : item
+            ? `data-action="view-item-stock" data-name="${escapeHtml(item.name)}"`
+            : '';
+          return `
+        <div class="list-item" ${rowAction} style="${rowAction ? 'cursor:pointer' : ''}">
+          <div class="item-icon">${categoryIcon(item?.category)}</div>
+          <div class="li-main">
+            <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</div>
+            <div class="li-sub">${formatDateVN(r.date)} · SL ${r.quantity} × ${formatMoney(r.costPrice)}</div>
+            ${r.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(r.imei)}</div>` : ''}
           </div>
         </div>`;
         })
@@ -2024,6 +2223,9 @@ function submitItemForm() {
     const old = DB.getItem(formDraft.editId);
     item.lastCostPrice = old?.lastCostPrice;
     item.createdAt = old?.createdAt;
+    // Xác nhận rõ ràng trước khi GHI ĐÈ 1 mặt hàng đã có — tránh lỡ bấm nhầm
+    // "Lưu" khi đang sửa mà làm mất/sai dữ liệu cũ.
+    if (!confirmDialog(`Lưu thay đổi cho mặt hàng "${name}"?`)) return;
   }
   DB.saveItem(item);
   toast('Đã lưu mặt hàng');
@@ -2113,15 +2315,23 @@ function dateGroupHeaderHtml(date, rows, sumFn) {
 }
 
 function renderPurchases(app) {
-  const periodRows = filterRowsByPeriodState(DB.getPurchases(), 'purchase');
+  // Gộp chung lần nhập hàng VÀ lần trả hàng NCC vào 1 dòng thời gian duy nhất
+  // (đánh dấu bằng __kind) để hiện xen kẽ theo đúng ngày xảy ra — trả hàng về
+  // bản chất cũng là 1 sự kiện thuộc "Nhập hàng", chỉ khác chiều tiền/tồn kho.
+  const combinedRows = [
+    ...DB.getPurchases().map((p) => ({ ...p, __kind: 'purchase' })),
+    ...DB.getPurchaseReturns().map((r) => ({ ...r, __kind: 'return' })),
+  ].sort((a, b) => b.date.localeCompare(a.date));
+  const periodRows = filterRowsByPeriodState(combinedRows, 'purchase');
 
   app.innerHTML = `
     ${periodTabsHtml('purchase', 'set-purchase-period')}
     ${state.purchasePeriod === 'custom' ? customRangeHtml('purchase') : ''}
-    <div class="input-with-btn" style="margin-bottom:12px">
+    <div class="input-with-btn" style="margin-bottom:8px">
       <input type="text" class="searchbox" style="margin-bottom:0" id="purchase-search" placeholder="🔍 Tìm theo tên, mã SP, mã vạch, ghi chú, IMEI..." value="${escapeHtml(state.purchaseSearch || '')}" />
       <button type="button" data-action="scan-for-purchase-search">📷</button>
     </div>
+    <button type="button" class="btn btn-secondary" data-action="add-purchase-return" style="margin-bottom:12px;width:100%">↩️ Trả hàng nhập cho NCC</button>
     <div id="purchase-summary"></div>
     <div id="stock-list"></div>
     <button class="fab" data-action="add-purchase">+</button>
@@ -2141,10 +2351,14 @@ function renderPurchases(app) {
       );
     });
     const summaryEl = document.getElementById('purchase-summary');
-    const totalSpend = rows.reduce((s, p) => s + p.costPrice * p.quantity, 0);
+    const purchaseRows = rows.filter((p) => p.__kind !== 'return');
+    const returnRows = rows.filter((p) => p.__kind === 'return');
+    const totalPurchase = purchaseRows.reduce((s, p) => s + p.costPrice * p.quantity, 0);
+    const totalReturn = returnRows.reduce((s, p) => s + p.costPrice * p.quantity, 0);
     summaryEl.innerHTML = `<div class="stat-grid" style="margin-bottom:10px">
-      <div class="stat-card"><div class="label">Số lần nhập</div><div class="value">${rows.length}</div></div>
-      <div class="stat-card"><div class="label">Tổng tiền nhập</div><div class="value neg">${formatMoney(totalSpend)}</div></div>
+      <div class="stat-card"><div class="label">Số lần nhập</div><div class="value">${purchaseRows.length}</div></div>
+      <div class="stat-card"><div class="label">Tổng tiền nhập (đã trừ trả hàng)</div><div class="value neg">${formatMoney(totalPurchase - totalReturn)}</div></div>
+      ${totalReturn > 0 ? `<div class="stat-card wide"><div class="label">↩️ Đã trả NCC (${returnRows.length} lần)</div><div class="value">${formatMoney(totalReturn)}</div></div>` : ''}
     </div>`;
 
     const listEl = document.getElementById('stock-list');
@@ -2154,23 +2368,24 @@ function renderPurchases(app) {
     }
     listEl.innerHTML = groupRowsByDate(rows)
       .map(({ date, rows: dayRows }) => {
-        const header = dateGroupHeaderHtml(date, dayRows, (p) => p.costPrice * p.quantity);
+        const header = dateGroupHeaderHtml(date, dayRows, (p) => (p.__kind === 'return' ? -p.costPrice * p.quantity : p.costPrice * p.quantity));
         const items = dayRows
           .map((p) => {
             const item = DB.getItem(p.itemId);
+            const isReturn = p.__kind === 'return';
             return `
           <div class="list-item">
             <div class="item-icon" ${item ? `data-action="view-item-detail" data-id="${item.id}"` : ''}>${categoryIcon(item?.category)}</div>
             <div class="li-main" ${item ? `data-action="view-item-detail" data-id="${item.id}"` : ''}>
-              <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')} <span class="badge nhap">Nhập</span></div>
+              <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')} <span class="badge ${isReturn ? 'tra' : 'nhap'}">${isReturn ? '↩️ Trả NCC' : 'Nhập'}</span></div>
               <div class="li-sub">SL ${p.quantity} × ${formatMoney(p.costPrice)}${p.note ? ' · ' + escapeHtml(p.note) : ''}</div>
               ${p.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(p.imei)}</div>` : ''}
             </div>
             <div class="li-right">
-              <div class="li-amount">${formatMoney(p.costPrice * p.quantity)}</div>
+              <div class="li-amount ${isReturn ? 'neg' : ''}">${isReturn ? '-' : ''}${formatMoney(p.costPrice * p.quantity)}</div>
               <div class="li-actions">
-                <button class="icon-btn" data-action="edit-purchase" data-id="${p.id}">✏️</button>
-                <button class="icon-btn" data-action="delete-purchase" data-id="${p.id}">🗑️</button>
+                <button class="icon-btn" data-action="${isReturn ? 'edit-purchase-return' : 'edit-purchase'}" data-id="${p.id}">✏️</button>
+                <button class="icon-btn" data-action="${isReturn ? 'delete-purchase-return' : 'delete-purchase'}" data-id="${p.id}">🗑️</button>
               </div>
             </div>
           </div>`;
@@ -2204,6 +2419,12 @@ function selectFormItem(item) {
     const costInput = document.getElementById('f-cost-price');
     if (costInput && !costInput.value) costInput.value = item.defaultCostPrice || '';
   }
+  if (formDraft.formType === 'purchaseReturn') {
+    // Giá hoàn mặc định lấy theo giá nhập GẦN NHẤT thực tế của mặt hàng (thường
+    // đúng với lô đang còn tồn hơn là giá mặc định lưu trên mặt hàng).
+    const costInput = document.getElementById('f-cost-price');
+    if (costInput && !costInput.value) costInput.value = getLatestCostPrice(item.id) || item.defaultCostPrice || '';
+  }
   if (formDraft.formType === 'sale') {
     const sellInput = document.getElementById('f-sell-price');
     if (sellInput && !sellInput.value) sellInput.value = item.defaultSellPrice || '';
@@ -2211,11 +2432,12 @@ function selectFormItem(item) {
   }
 }
 
-// Các IMEI/số seri của 1 mặt hàng đã nhập nhưng CHƯA bán (còn tồn kho) — dùng
-// để gợi ý chọn nhanh khi tạo lần bán, đỡ phải gõ/quét lại tay. excludeSaleId
-// dùng khi đang SỬA 1 lần bán: IMEI đã gán sẵn cho chính lần bán đó vẫn được
-// coi là "còn tồn" (không bị coi là đã bán bởi chính nó).
-function getAvailableImeisForItem(itemId, excludeSaleId) {
+// Các IMEI/số seri của 1 mặt hàng đã nhập nhưng CHƯA bán và CHƯA trả NCC (còn
+// tồn kho thực sự) — dùng để gợi ý chọn nhanh khi tạo lần bán hoặc lần trả
+// hàng, đỡ phải gõ/quét lại tay. excludeSaleId dùng khi đang SỬA 1 lần bán:
+// IMEI đã gán sẵn cho chính lần bán đó vẫn được coi là "còn tồn" (không bị
+// coi là đã bán bởi chính nó). excludeReturnId tương tự cho lần trả hàng.
+function getAvailableImeisForItem(itemId, excludeSaleId, excludeReturnId) {
   const purchasedImeis = [];
   DB.getPurchases()
     .filter((p) => p.itemId === itemId)
@@ -2236,7 +2458,17 @@ function getAvailableImeisForItem(itemId, excludeSaleId) {
         .filter(Boolean)
         .forEach((im) => soldImeis.add(im.toLowerCase()));
     });
-  return purchasedImeis.filter((im) => !soldImeis.has(im.toLowerCase()));
+  const returnedImeis = new Set();
+  DB.getPurchaseReturns()
+    .filter((r) => r.itemId === itemId && r.id !== excludeReturnId)
+    .forEach((r) => {
+      (r.imei || '')
+        .split(',')
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .forEach((im) => returnedImeis.add(im.toLowerCase()));
+    });
+  return purchasedImeis.filter((im) => !soldImeis.has(im.toLowerCase()) && !returnedImeis.has(im.toLowerCase()));
 }
 
 // Vẽ danh sách chip IMEI còn tồn kho của mặt hàng đang chọn trong form Bán
@@ -2418,16 +2650,44 @@ function findImeisAlreadySold(imeiList, excludeSaleId) {
   return result;
 }
 
-// Tồn kho thực tế còn lại của 1 mặt hàng (đã nhập - đã bán), có thể loại trừ
-// chính lần bán đang sửa (excludeSaleId) để tính đúng khi sửa lại 1 đơn cũ.
-function getAvailableStockForItem(itemId, excludeSaleId) {
+// Tồn kho thực tế còn lại của 1 mặt hàng (đã nhập - đã bán - đã trả NCC), có
+// thể loại trừ chính lần bán đang sửa (excludeSaleId) hoặc chính lần trả
+// hàng đang sửa (excludeReturnId) để tính đúng khi sửa lại 1 đơn cũ.
+function getAvailableStockForItem(itemId, excludeSaleId, excludeReturnId) {
   const purchased = DB.getPurchases()
     .filter((p) => p.itemId === itemId)
     .reduce((s, p) => s + p.quantity, 0);
   const sold = DB.getSales()
     .filter((s) => s.itemId === itemId && s.id !== excludeSaleId)
     .reduce((s, x) => s + x.quantity, 0);
-  return purchased - sold;
+  const returned = DB.getPurchaseReturns()
+    .filter((r) => r.itemId === itemId && r.id !== excludeReturnId)
+    .reduce((s, x) => s + x.quantity, 0);
+  return purchased - sold - returned;
+}
+
+// Tìm các IMEI/số seri trong danh sách đã được TRẢ LẠI NHÀ CUNG CẤP trước đó
+// (ở bất kỳ lần trả hàng nào) — dùng để chặn trả trùng 1 máy 2 lần, hoặc bán
+// nhầm 1 máy đã trả NCC (không còn ở cửa hàng nữa). Trả về mảng {imei, ret}.
+function findImeisAlreadyReturned(imeiList, excludeReturnId) {
+  if (!imeiList.length) return [];
+  const retMap = new Map();
+  DB.getPurchaseReturns().forEach((r) => {
+    if (excludeReturnId && r.id === excludeReturnId) return;
+    (r.imei || '')
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .forEach((im) => {
+        if (!retMap.has(im.toLowerCase())) retMap.set(im.toLowerCase(), r);
+      });
+  });
+  const result = [];
+  imeiList.forEach((im) => {
+    const ret = retMap.get(im.toLowerCase());
+    if (ret) result.push({ imei: im, ret });
+  });
+  return result;
 }
 
 function submitPurchaseForm() {
@@ -2464,8 +2724,132 @@ function submitPurchaseForm() {
     imei,
     note: document.getElementById('f-note').value.trim(),
   };
+  // Xác nhận rõ ràng trước khi GHI ĐÈ 1 lần nhập hàng đã có — tránh lỡ bấm
+  // nhầm "Lưu" khi đang sửa mà làm sai lệch số liệu tồn kho/giá vốn cũ.
+  if (formDraft.editId) {
+    const itemName = DB.getItem(formDraft.itemId)?.name || 'mặt hàng này';
+    if (!confirmDialog(`Lưu thay đổi cho lần nhập hàng "${itemName}"?`)) return;
+  }
   DB.savePurchase(p);
   toast('Đã lưu lần nhập hàng');
+  closeSheet();
+  render();
+}
+
+// ---------------------------------------------------------------------
+// PURCHASE RETURNS (Trả hàng nhập cho nhà cung cấp) — dùng chung cơ chế nhập
+// nhiều dòng IMEI (renderImeiLines/syncImeiLinesFromDom/quét liên tiếp...)
+// với form Nhập hàng ở trên, vì cùng bản chất "chọn 1 mặt hàng + số lượng +
+// IMEI tuỳ chọn".
+// ---------------------------------------------------------------------
+function openPurchaseReturnForm(r) {
+  const isEdit = !!r;
+  const initialQty = r?.quantity ?? 1;
+  const initialImeis = r?.imei ? r.imei.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  const lineCount = Math.max(initialQty, initialImeis.length, 1);
+  const imeiLines = [];
+  for (let i = 0; i < lineCount; i++) imeiLines.push(initialImeis[i] || '');
+  formDraft = { editId: r ? r.id : null, itemId: r ? r.itemId : null, formType: 'purchaseReturn', imeiLines };
+  const item = r ? DB.getItem(r.itemId) : null;
+  openSheet(`
+    <div class="sheet-title">${isEdit ? 'Sửa lần trả hàng NCC' : '↩️ Trả hàng nhập cho NCC'}</div>
+    <p class="help-text" style="margin-top:-8px">Dùng khi trả lại nhà cung cấp 1 số sản phẩm đã nhập (hàng lỗi, đặt nhầm...) — hệ thống sẽ tự trừ số này khỏi tồn kho.</p>
+    <div class="form-group">
+      <label>Mặt hàng *</label>
+      <div class="picked-item-box" id="picked-item-box" data-action="open-item-picker-for-form">${itemPickBoxHtml(item)}</div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Ngày trả</label>
+        <input type="date" id="f-date" value="${r?.date || todayStr()}" />
+      </div>
+      <div class="form-group">
+        <label>Số lượng trả</label>
+        <input type="number" id="f-qty" value="${initialQty}" min="1" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Giá hoàn / đơn vị</label>
+      <input type="number" id="f-cost-price" value="${r?.costPrice ?? ''}" min="0" placeholder="0" />
+    </div>
+    <div class="form-group">
+      <label>IMEI / Số seri máy trả (tuỳ chọn)</label>
+      <button type="button" class="btn btn-primary" data-action="scan-purchase-imei-continuous" style="margin-bottom:8px;width:100%">📷 Quét liên tiếp nhiều máy</button>
+      <div id="imei-lines"></div>
+      <button type="button" class="btn btn-secondary" data-action="add-purchase-imei-line" style="margin-top:2px">+ Thêm dòng IMEI</button>
+      <p class="help-text">Chỉ chọn được IMEI đang thực sự còn tồn kho (chưa bán, chưa trả lần nào khác).</p>
+    </div>
+    <div class="form-group">
+      <label>Lý do / Ghi chú</label>
+      <textarea id="f-note" placeholder="VD: hàng lỗi, đặt nhầm model...">${escapeHtml(r?.note || '')}</textarea>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" data-action="close-sheet">Huỷ</button>
+      <button class="btn btn-primary" data-action="submit-purchase-return-form">Lưu</button>
+    </div>
+  `);
+  renderImeiLines();
+  document.getElementById('f-qty').addEventListener('input', (e) => {
+    syncImeiLinesFromDom();
+    const qty = Math.max(1, Number(e.target.value) || 1);
+    while (formDraft.imeiLines.length < qty) formDraft.imeiLines.push('');
+    renderImeiLines();
+  });
+  document.getElementById('imei-lines').addEventListener('input', (e) => {
+    if (!e.target.classList.contains('f-purchase-imei-line')) return;
+    syncImeiLinesFromDom();
+    syncPurchaseQtyWithImei();
+  });
+}
+
+function submitPurchaseReturnForm() {
+  if (!formDraft.itemId) { toast('Vui lòng chọn mặt hàng', true); return; }
+  const item = DB.getItem(formDraft.itemId);
+  syncImeiLinesFromDom();
+  const imeiList = formDraft.imeiLines.map((s) => (s || '').trim()).filter(Boolean);
+  const imei = imeiList.join(', ');
+  const quantity = imeiList.length > 0 ? imeiList.length : Math.max(1, Number(document.getElementById('f-qty').value) || 1);
+
+  // Chặn cứng: không cho trả nhiều hơn số đang thực tồn kho của mặt hàng này.
+  const availableStock = item ? getAvailableStockForItem(item.id, null, formDraft.editId) : 0;
+  if (quantity > availableStock) {
+    toast(`⚠️ "${item?.name || 'Mặt hàng'}" chỉ còn ${availableStock} ${item?.unit || ''} trong kho, không thể trả ${quantity}.`, true);
+    return;
+  }
+
+  // Chặn cứng: từng IMEI phải đang thực sự còn tồn kho — không cho trả 1
+  // máy đã bán, hoặc trả trùng 1 máy đã trả ở lần khác trước đó.
+  if (imeiList.length) {
+    const dupSold = findImeisAlreadySold(imeiList, null);
+    if (dupSold.length) {
+      const detail = dupSold.map((x) => `• ${x.imei} — đã bán ngày ${formatDateVN(x.sale.date)}`).join('\n');
+      alert(`❌ Không thể lưu lần trả hàng này.\n\nCác IMEI/số seri sau đã bán ra, không còn ở cửa hàng để trả:\n${detail}`);
+      return;
+    }
+    const dupReturned = findImeisAlreadyReturned(imeiList, formDraft.editId);
+    if (dupReturned.length) {
+      const detail = dupReturned.map((x) => `• ${x.imei} — đã trả NCC ngày ${formatDateVN(x.ret.date)}`).join('\n');
+      alert(`❌ Không thể lưu lần trả hàng này.\n\nCác IMEI/số seri sau đã được trả lại NCC ở 1 lần khác trước đó (trùng lặp):\n${detail}`);
+      return;
+    }
+  }
+
+  const r = {
+    id: formDraft.editId,
+    itemId: formDraft.itemId,
+    date: document.getElementById('f-date').value || todayStr(),
+    quantity,
+    costPrice: parseMoneyInput(document.getElementById('f-cost-price').value),
+    imei,
+    note: document.getElementById('f-note').value.trim(),
+  };
+  // Xác nhận rõ ràng trước khi GHI ĐÈ 1 lần trả hàng NCC đã có — tránh lỡ
+  // bấm nhầm "Lưu" khi đang sửa mà làm sai lệch tồn kho đã trả trước đó.
+  if (formDraft.editId) {
+    if (!confirmDialog(`Lưu thay đổi cho lần trả hàng NCC "${item?.name || 'mặt hàng này'}"?`)) return;
+  }
+  DB.savePurchaseReturn(r);
+  toast('Đã lưu lần trả hàng NCC');
   closeSheet();
   render();
 }
@@ -2584,10 +2968,403 @@ function computeTotalDebt() {
   return DB.getSales().reduce((sum, s) => sum + getSaleDebt(s), 0);
 }
 
+// ---------------------------------------------------------------------
+// "Bán hàng mới" — form NHIỀU DÒNG SẢN PHẨM: 1 hoá đơn có thể gồm nhiều
+// mặt hàng khác nhau (thay vì trước đây mỗi lần bán chỉ được đúng 1 sản
+// phẩm). Cách làm: mỗi dòng sản phẩm khi lưu tạo ra 1 bản ghi `sale` riêng
+// biệt như cũ (không đổi cấu trúc dữ liệu sẵn có), nhưng tất cả các dòng
+// trong cùng 1 lần bán được gắn chung `orderId` + `invoiceNo` — nhờ vậy mọi
+// chỗ đang tính công nợ/doanh thu/lãi theo từng `sale` (vốn cộng dồn qua
+// TOÀN BỘ danh sách sale) vẫn ra đúng số liệu mà KHÔNG cần sửa gì thêm; khi
+// in hoá đơn, printInvoice() tự nhận ra các dòng cùng orderId và gộp in
+// chung thành 1 tờ (xem printOrderInvoice).
+// ---------------------------------------------------------------------
+function saleLineRowHtml(idx, line) {
+  const item = line.itemId ? DB.getItem(line.itemId) : null;
+  const canRemove = formDraft.lines && formDraft.lines.length > 1;
+  return `
+    <div class="card" style="margin-bottom:10px">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px">
+        <b>Sản phẩm ${idx + 1}</b>
+        ${canRemove ? `<button type="button" class="icon-btn" data-action="remove-sale-line" data-idx="${idx}">✕</button>` : ''}
+      </div>
+      <div class="picked-item-box" data-action="open-item-picker-for-sale-line" data-idx="${idx}" style="margin-bottom:10px">${itemPickBoxHtml(item)}</div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Số lượng</label>
+          <input type="number" class="f-line-qty" data-idx="${idx}" value="${line.qty ?? 1}" min="1" />
+        </div>
+        <div class="form-group">
+          <label>Giá bán / đơn vị</label>
+          <input type="number" class="f-line-sell-price" data-idx="${idx}" value="${line.sellPrice ?? ''}" min="0" placeholder="0" />
+        </div>
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label>IMEI / Số seri (tuỳ chọn)</label>
+        <div class="input-with-btn">
+          <input type="text" class="f-line-imei" data-idx="${idx}" value="${escapeHtml(line.imei || '')}" placeholder="Quét hoặc nhập tay" />
+          <button type="button" data-action="scan-for-sale-line-imei" data-idx="${idx}">📷</button>
+        </div>
+        <div class="chip-row sale-line-imei-suggestions" data-idx="${idx}" style="flex-wrap:wrap; margin-bottom:0"></div>
+      </div>
+    </div>`;
+}
+
+function renderSaleLines() {
+  const wrap = document.getElementById('sale-lines');
+  if (!wrap) return;
+  wrap.innerHTML = formDraft.lines.map((l, i) => saleLineRowHtml(i, l)).join('');
+  formDraft.lines.forEach((l, i) => renderSaleLineImeiSuggestions(i));
+  updateSaleOrderDebtPreview();
+}
+
+function syncSaleLinesFromDom() {
+  document.querySelectorAll('.f-line-qty').forEach((inp) => {
+    const idx = Number(inp.dataset.idx);
+    if (formDraft.lines[idx]) formDraft.lines[idx].qty = Number(inp.value) || 1;
+  });
+  document.querySelectorAll('.f-line-sell-price').forEach((inp) => {
+    const idx = Number(inp.dataset.idx);
+    if (formDraft.lines[idx]) formDraft.lines[idx].sellPrice = inp.value;
+  });
+  document.querySelectorAll('.f-line-imei').forEach((inp) => {
+    const idx = Number(inp.dataset.idx);
+    if (formDraft.lines[idx]) formDraft.lines[idx].imei = inp.value;
+  });
+}
+
+function selectSaleLineItem(idx, item) {
+  syncSaleLinesFromDom();
+  const line = formDraft.lines[idx];
+  if (!line) return;
+  line.itemId = item.id;
+  if (!line.sellPrice) line.sellPrice = item.defaultSellPrice || '';
+  renderSaleLines();
+}
+
+// Gợi ý IMEI còn tồn kho cho 1 dòng sản phẩm cụ thể — loại trừ luôn các IMEI
+// đã được chọn ở CÁC DÒNG KHÁC trong cùng đơn đang tạo (VD đơn có 2 dòng
+// cùng bán 1 mẫu điện thoại, chọn IMEI-A ở dòng 1 thì dòng 2 không được gợi
+// ý lại IMEI-A nữa) — tránh trùng IMEI ngay trong lúc nhập liệu.
+function renderSaleLineImeiSuggestions(idx) {
+  const wrap = document.querySelector(`.sale-line-imei-suggestions[data-idx="${idx}"]`);
+  if (!wrap) return;
+  const line = formDraft.lines[idx];
+  if (!line || !line.itemId) {
+    wrap.innerHTML = '';
+    return;
+  }
+  const usedInOtherLines = new Set();
+  formDraft.lines.forEach((l, i) => {
+    if (i === idx) return;
+    (l.imei || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .forEach((im) => usedInOtherLines.add(im.toLowerCase()));
+  });
+  const available = getAvailableImeisForItem(line.itemId, null, null).filter((im) => !usedInOtherLines.has(im.toLowerCase()));
+  if (available.length === 0) {
+    wrap.innerHTML = '';
+    return;
+  }
+  const selected = new Set(
+    (line.imei || '')
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+  );
+  wrap.innerHTML =
+    `<p class="help-text" style="width:100%; margin:6px 0 4px">📦 IMEI còn tồn kho (bấm để chọn):</p>` +
+    available
+      .map(
+        (im) =>
+          `<button type="button" class="chip ${selected.has(im.toLowerCase()) ? 'active' : ''}" data-action="pick-sale-line-imei" data-idx="${idx}" data-imei="${escapeHtml(im)}">${escapeHtml(im)}</button>`
+      )
+      .join('');
+}
+
+// Xem trước "còn nợ" cho CẢ ĐƠN — cộng tổng tiền tất cả dòng sản phẩm rồi so
+// với số "đã thanh toán" nhập chung 1 lần cho cả đơn.
+function updateSaleOrderDebtPreview() {
+  syncSaleLinesFromDom();
+  const discountPercent = Number(document.getElementById('f-discount-percent')?.value) || 0;
+  const total = formDraft.lines.reduce((sum, l) => {
+    const sellPrice = parseMoneyInput(l.sellPrice || 0);
+    const qty = Number(l.qty) || 1;
+    return sum + getSaleTotal({ sellPrice, quantity: qty, discountPercent });
+  }, 0);
+  const paidRaw = document.getElementById('f-paid-amount')?.value;
+  const paid = paidRaw === '' || paidRaw == null ? total : Math.max(0, Math.min(parseMoneyInput(paidRaw), total));
+  const debt = total - paid;
+  const el = document.getElementById('debt-preview');
+  if (!el) return;
+  el.innerHTML =
+    debt > 0
+      ? `Tổng tiền đơn: ${formatMoney(total)} · Còn nợ: <b class="neg">${formatMoney(debt)}</b>`
+      : `Tổng tiền đơn: ${formatMoney(total)} · Đã trả đủ ✅`;
+}
+
+function openNewSaleOrderForm() {
+  formDraft = { formType: 'saleOrder', customerId: null, lines: [{ itemId: null, qty: 1, sellPrice: '', imei: '' }] };
+  openSheet(`
+    <div class="sheet-title">Bán hàng mới</div>
+    <div id="sale-lines"></div>
+    <button type="button" class="btn btn-secondary" data-action="add-sale-line" style="margin-bottom:14px">+ Thêm sản phẩm</button>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Ngày bán</label>
+        <input type="date" id="f-date" value="${todayStr()}" />
+      </div>
+      <div class="form-group">
+        <label>Hình thức thanh toán</label>
+        <select id="f-payment-method">
+          ${['Tiền mặt', 'Chuyển khoản', 'Khác'].map((m) => `<option value="${m}" ${m === 'Tiền mặt' ? 'selected' : ''}>${m}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Chiết khấu (%) — áp dụng cho cả đơn</label>
+      <input type="number" id="f-discount-percent" value="0" min="0" max="100" />
+    </div>
+    <div class="form-group">
+      <label>Tiền khách đưa (tuỳ chọn, để tính tiền thừa trên hoá đơn)</label>
+      <input type="number" id="f-cash-given" min="0" placeholder="Bỏ trống nếu không cần in tiền thừa" />
+    </div>
+    <div class="form-group">
+      <label>💳 Khách đã thanh toán (công nợ)</label>
+      <input type="number" id="f-paid-amount" min="0" placeholder="Để trống = khách đã trả đủ" />
+      <p class="help-text" id="debt-preview" style="margin:4px 0 0"></p>
+    </div>
+    <div class="section-title" style="margin-top:4px">Thông tin khách hàng</div>
+    <button type="button" class="btn btn-secondary" data-action="open-customer-picker-for-sale" style="margin-bottom:12px">📇 Chọn khách đã lưu</button>
+    <div class="form-group">
+      <label>Tên khách hàng</label>
+      <input type="text" id="f-cust-name" placeholder="Khách lẻ" />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Số điện thoại</label>
+        <input type="tel" id="f-cust-phone" placeholder="09xxxxxxxx" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Địa chỉ</label>
+      <input type="text" id="f-cust-address" placeholder="Địa chỉ giao hàng..." />
+    </div>
+    <p class="help-text" style="margin:-6px 0 14px">Có thể nhập tay cho khách lẻ, hoặc bấm "Chọn khách đã lưu" để lấy nhanh từ danh bạ.</p>
+    <div class="form-group">
+      <label>Ghi chú</label>
+      <textarea id="f-note"></textarea>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" data-action="close-sheet">Huỷ</button>
+      <button class="btn btn-primary" data-action="submit-new-sale-order">Lưu</button>
+    </div>
+  `);
+  renderSaleLines();
+  document.getElementById('sale-lines').addEventListener('input', (e) => {
+    if (e.target.classList.contains('f-line-imei')) {
+      const idx = Number(e.target.dataset.idx);
+      syncSaleLinesFromDom();
+      renderSaleLineImeiSuggestions(idx);
+    }
+    updateSaleOrderDebtPreview();
+  });
+  ['f-discount-percent', 'f-paid-amount'].forEach((id) => {
+    document.getElementById(id).addEventListener('input', updateSaleOrderDebtPreview);
+  });
+  updateSaleOrderDebtPreview();
+}
+
+function submitNewSaleOrderForm() {
+  syncSaleLinesFromDom();
+  const lines = formDraft.lines;
+
+  // Mọi dòng phải chọn mặt hàng trước khi lưu.
+  const missingItemIdx = lines.findIndex((l) => !l.itemId);
+  if (missingItemIdx >= 0) {
+    toast(`Vui lòng chọn mặt hàng cho sản phẩm ${missingItemIdx + 1}`, true);
+    return;
+  }
+
+  // Chặn cứng: tổng số lượng bán của CÙNG 1 mặt hàng trên các dòng khác nhau
+  // trong đơn (VD 2 dòng cùng bán 1 sản phẩm) không được vượt quá tồn kho.
+  const qtyByItem = {};
+  lines.forEach((l) => {
+    qtyByItem[l.itemId] = (qtyByItem[l.itemId] || 0) + (Number(l.qty) || 1);
+  });
+  for (const itemId in qtyByItem) {
+    const item = DB.getItem(itemId);
+    const available = getAvailableStockForItem(itemId, null, null);
+    if (qtyByItem[itemId] > available) {
+      if (available <= 0) {
+        toast(`⚠️ "${item?.name || 'Mặt hàng'}" đã HẾT HÀNG (tồn kho: 0), không thể bán thêm.`, true);
+      } else {
+        toast(`⚠️ Không đủ hàng: "${item?.name || ''}" chỉ còn ${available} ${item?.unit || ''} trong kho (đang bán ${qtyByItem[itemId]}).`, true);
+      }
+      return;
+    }
+  }
+
+  // Chặn cứng: IMEI/số seri không được trùng nhau NGAY TRONG cùng đơn đang tạo.
+  const allImeisFlat = [];
+  lines.forEach((l, idx) => {
+    (l.imei || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .forEach((im) => allImeisFlat.push({ imei: im, lineIdx: idx }));
+  });
+  const seenImei = new Map();
+  for (const x of allImeisFlat) {
+    const key = x.imei.toLowerCase();
+    if (seenImei.has(key)) {
+      toast(`⚠️ IMEI/số seri "${x.imei}" bị trùng giữa các sản phẩm trong cùng đơn này.`, true);
+      return;
+    }
+    seenImei.set(key, x.lineIdx);
+  }
+  const allImeis = allImeisFlat.map((x) => x.imei);
+
+  // Chặn cứng: không cho bán trùng 1 IMEI/số seri đã được bán ở đơn khác.
+  const dupSoldImeis = findImeisAlreadySold(allImeis, null);
+  if (dupSoldImeis.length) {
+    const detail = dupSoldImeis
+      .map((x) => `• ${x.imei} — đã bán ngày ${formatDateVN(x.sale.date)}${x.sale.customerName ? ' cho ' + x.sale.customerName : ''}`)
+      .join('\n');
+    alert(`❌ Không thể lưu đơn này.\n\nCác IMEI/số seri sau đã được bán ở 1 đơn khác trước đó (trùng lặp):\n${detail}`);
+    return;
+  }
+
+  // Chặn cứng: không cho bán 1 IMEI/số seri đã trả lại nhà cung cấp trước đó.
+  const returnedImeis = findImeisAlreadyReturned(allImeis, null);
+  if (returnedImeis.length) {
+    const detail = returnedImeis.map((x) => `• ${x.imei} — đã trả NCC ngày ${formatDateVN(x.ret.date)}`).join('\n');
+    alert(`❌ Không thể lưu đơn này.\n\nCác IMEI/số seri sau đã được trả lại nhà cung cấp, không còn ở cửa hàng:\n${detail}`);
+    return;
+  }
+
+  // Khách hàng — xử lý 1 lần cho cả đơn (giống hệt lần bán 1 sản phẩm).
+  const customerName = document.getElementById('f-cust-name').value.trim();
+  const customerPhone = document.getElementById('f-cust-phone').value.trim();
+  const customerAddress = document.getElementById('f-cust-address').value.trim();
+  let customerId = formDraft.customerId || null;
+  if (customerName) {
+    if (customerId) {
+      const existing = DB.getCustomer(customerId);
+      if (existing) {
+        DB.saveCustomer({ ...existing, name: customerName, phone: customerPhone, address: customerAddress });
+      }
+    } else {
+      const matched = customerPhone ? DB.getCustomers().find((c) => c.phone && c.phone === customerPhone) : null;
+      if (matched) {
+        customerId = matched.id;
+        DB.saveCustomer({ ...matched, name: customerName, address: customerAddress || matched.address });
+      } else {
+        const created = DB.saveCustomer({ name: customerName, phone: customerPhone, address: customerAddress });
+        customerId = created.id;
+      }
+    }
+  }
+
+  const saleDate = document.getElementById('f-date').value || todayStr();
+  const paymentMethod = document.getElementById('f-payment-method').value;
+  const discountPercent = Number(document.getElementById('f-discount-percent').value) || 0;
+  const note = document.getElementById('f-note').value.trim();
+  const cashGivenRaw = document.getElementById('f-cash-given').value;
+  const cashGiven = cashGivenRaw === '' ? null : Number(cashGivenRaw);
+  const paidRaw = document.getElementById('f-paid-amount').value;
+
+  // Chia "đã thanh toán" (1 số tiền cố định nhập chung cho cả đơn) theo ĐÚNG
+  // TỈ LỆ mỗi dòng đóng góp vào tổng tiền đơn — nhờ discountPercent giống hệt
+  // nhau trên mọi dòng, công thức getSaleTotal() sẵn có tự cho ra đúng số tiền
+  // chiết khấu theo dòng mà không cần thêm logic riêng. Phần dư do làm tròn
+  // được gán cho dòng CUỐI để tổng cộng khớp chính xác số khách đã trả.
+  const lineTotals = lines.map((l) =>
+    getSaleTotal({ sellPrice: parseMoneyInput(l.sellPrice), quantity: Number(l.qty) || 1, discountPercent })
+  );
+  const orderTotal = lineTotals.reduce((s, x) => s + x, 0);
+  let linePaidAmounts;
+  if (paidRaw === '') {
+    // Để trống = khách đã trả đủ, giữ đúng ý nghĩa "paidAmount: null" như
+    // form bán 1 sản phẩm — áp dụng cho MỌI dòng trong đơn.
+    linePaidAmounts = lines.map(() => null);
+  } else {
+    const orderPaid = Math.max(0, Math.min(parseMoneyInput(paidRaw), orderTotal));
+    linePaidAmounts = lineTotals.map((lt) => (orderTotal > 0 ? Math.round((lt / orderTotal) * orderPaid) : 0));
+    const sumSoFar = linePaidAmounts.reduce((s, x) => s + x, 0);
+    const remainder = orderPaid - sumSoFar;
+    if (linePaidAmounts.length > 0) linePaidAmounts[linePaidAmounts.length - 1] += remainder;
+  }
+
+  const orderId = uid();
+  const invoiceNo = 'HD' + String(DB.getSales().length + 1).padStart(6, '0');
+
+  // Lưu TUẦN TỰ từng dòng (không gộp lô) để dòng sau "thấy" được dòng trước
+  // đã lưu vào DB — quan trọng khi 2 dòng trong cùng đơn bán CÙNG 1 mặt
+  // hàng: computeFifoSaleCosts() của dòng sau phải nhìn thấy dòng trước đã
+  // tiêu thụ lô nào rồi mới tính đúng giá vốn FIFO, tránh 2 dòng cùng tính
+  // trùng vào 1 lô nhập.
+  const savedSales = [];
+  lines.forEach((l, idx) => {
+    const item = DB.getItem(l.itemId);
+    const quantity = Number(l.qty) || 1;
+    const imei = (l.imei || '').trim();
+    const draftSale = {
+      id: '__draft_new_sale__',
+      itemId: l.itemId,
+      quantity,
+      imei,
+      date: saleDate,
+      createdAt: Date.now(),
+    };
+    const costBasis = item ? computeFifoSaleCosts(item.id, draftSale)[draftSale.id] || 0 : 0;
+    const s = {
+      itemId: l.itemId,
+      customerId,
+      date: saleDate,
+      quantity,
+      sellPrice: parseMoneyInput(l.sellPrice),
+      costPriceAtSale: costBasis,
+      imei,
+      customerName,
+      customerPhone,
+      customerAddress,
+      note,
+      paymentMethod,
+      discountPercent,
+      // "Tiền khách đưa" chỉ có ý nghĩa 1 lần cho cả đơn (dùng tính tiền thừa
+      // trên hoá đơn) nên chỉ lưu ở dòng đầu tiên, tránh hiểu nhầm là mỗi dòng
+      // khách đưa riêng từng đó tiền.
+      cashGiven: idx === 0 ? cashGiven : null,
+      paidAmount: linePaidAmounts[idx],
+      orderId,
+      invoiceNo,
+    };
+    savedSales.push(DB.saveSale(s));
+  });
+
+  toast('Đã lưu đơn bán hàng');
+  closeSheet();
+  render();
+  if (savedSales.length) printInvoice(savedSales[0]);
+}
+
+// "Bán hàng mới" (không truyền s) mở form nhiều dòng sản phẩm (1 hoá đơn có
+// thể gồm nhiều mặt hàng khác nhau — xem openNewSaleOrderForm). Sửa lại 1
+// dòng bán hàng ĐÃ có vẫn dùng đúng form đơn-sản-phẩm như trước đây, để đơn
+// giản và an toàn dữ liệu (đơn nhiều sản phẩm gồm nhiều bản ghi sale riêng
+// biệt gắn chung orderId — sửa từng dòng là sửa đúng 1 sản phẩm trong đó).
 function openSaleForm(s) {
-  const isEdit = !!s;
-  formDraft = { editId: s ? s.id : null, itemId: s ? s.itemId : null, formType: 'sale', customerId: s ? s.customerId : null };
-  const item = s ? DB.getItem(s.itemId) : null;
+  if (!s) return openNewSaleOrderForm();
+  return openSaleEditForm(s);
+}
+
+function openSaleEditForm(s) {
+  const isEdit = true;
+  formDraft = { editId: s.id, itemId: s.itemId, formType: 'sale', customerId: s.customerId || null };
+  const item = DB.getItem(s.itemId);
   openSheet(`
     <div class="sheet-title">${isEdit ? 'Sửa lần bán hàng' : 'Bán hàng mới'}</div>
     <div class="form-group">
@@ -2720,6 +3497,17 @@ function submitSaleForm() {
     return;
   }
 
+  // Chặn cứng: không cho bán 1 IMEI/số seri đã trả lại nhà cung cấp trước đó
+  // (máy đó không còn thực sự ở cửa hàng nữa).
+  const returnedImeis = findImeisAlreadyReturned(imeiList, null);
+  if (returnedImeis.length) {
+    const detail = returnedImeis
+      .map((x) => `• ${x.imei} — đã trả NCC ngày ${formatDateVN(x.ret.date)}`)
+      .join('\n');
+    alert(`❌ Không thể lưu lần bán này.\n\nCác IMEI/số seri sau đã được trả lại nhà cung cấp, không còn ở cửa hàng:\n${detail}`);
+    return;
+  }
+
   const customerName = document.getElementById('f-cust-name').value.trim();
   const customerPhone = document.getElementById('f-cust-phone').value.trim();
   const customerAddress = document.getElementById('f-cust-address').value.trim();
@@ -2782,6 +3570,11 @@ function submitSaleForm() {
         : Math.max(0, parseMoneyInput(document.getElementById('f-paid-amount').value)),
   };
   const isNewSale = !s.id;
+  // Xác nhận rõ ràng trước khi GHI ĐÈ 1 lần bán đã có — tránh lỡ bấm nhầm
+  // "Lưu" khi đang sửa mà làm sai lệch số liệu doanh thu/công nợ cũ.
+  if (!isNewSale) {
+    if (!confirmDialog(`Lưu thay đổi cho lần bán hàng "${item?.name || 'mặt hàng này'}"?`)) return;
+  }
   // Gán số hoá đơn 1 lần duy nhất khi tạo mới, giữ nguyên khi sửa lại sau này.
   if (isNewSale) {
     s.invoiceNo = 'HD' + String(DB.getSales().length + 1).padStart(6, '0');
@@ -2825,6 +3618,15 @@ function resolveInvoiceQr(shop, sale, total) {
 
 function printInvoice(sale) {
   if (!sale) { toast('Không tìm thấy đơn bán để in', true); return; }
+  // Đơn bán có nhiều sản phẩm (cùng orderId, tạo từ form "Bán hàng mới" nhiều
+  // dòng) — in gộp thành 1 hoá đơn duy nhất liệt kê đủ mọi sản phẩm, thay vì
+  // chỉ in đúng 1 dòng đang được bấm.
+  if (sale.orderId) {
+    const orderLines = DB.getSales()
+      .filter((x) => x.orderId === sale.orderId)
+      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    if (orderLines.length > 1) { printOrderInvoice(orderLines); return; }
+  }
   const item = DB.getItem(sale.itemId);
   const shop = DB.getShopInfo();
   const subtotal = sale.sellPrice * sale.quantity;
@@ -2924,6 +3726,146 @@ function printInvoice(sale) {
   </div>
   <div class="amount-words">(${soTienBangChu(total)} chẵn)</div>
   ${sale.note ? `<div>Ghi chú: ${escapeHtml(sale.note)}</div>` : ''}
+  ${
+    invoiceQr
+      ? `<div class="center qr-box section-gap">
+          <img src="${invoiceQr.dataUrl}" style="width:140px;height:140px;object-fit:contain" />
+          ${invoiceQr.caption ? `<div style="font-size:12px;margin-top:4px">${escapeHtml(invoiceQr.caption)}</div>` : ''}
+        </div>`
+      : ''
+  }
+  ${
+    shop.warranty
+      ? `<div class="warranty-box">${mdBoldToHtml(escapeHtml(shop.warranty)).replace(/\n/g, '<br/>')}</div>`
+      : ''
+  }
+  <div class="footer">Cảm ơn và hẹn gặp lại!</div>
+</body></html>`);
+  win.document.close();
+  setTimeout(() => {
+    try {
+      win.focus();
+      win.print();
+    } catch (e) {
+      // bỏ qua nếu cửa sổ đã bị đóng
+    }
+  }, 350);
+}
+
+// In hoá đơn cho 1 đơn bán NHIỀU sản phẩm (nhiều bản ghi sale cùng orderId,
+// tạo từ form "Bán hàng mới" nhiều dòng) — liệt kê đủ từng sản phẩm trong 1
+// bảng, tổng hợp tiền hàng/chiết khấu/công nợ trên toàn đơn thay vì chỉ 1
+// dòng. Các trường dùng chung (khách hàng, ngày, hình thức thanh toán, ghi
+// chú, chiết khấu %) giống hệt nhau trên mọi dòng nên lấy từ dòng đầu tiên;
+// riêng "tiền khách đưa" chỉ được lưu trên 1 dòng duy nhất lúc tạo đơn nên
+// phải tìm đúng dòng đó thay vì luôn lấy dòng đầu.
+function printOrderInvoice(lines) {
+  if (!lines || !lines.length) { toast('Không tìm thấy đơn bán để in', true); return; }
+  const primary = lines[0];
+  const shop = DB.getShopInfo();
+  const subtotalSum = lines.reduce((s, x) => s + x.sellPrice * x.quantity, 0);
+  const total = lines.reduce((s, x) => s + getSaleTotal(x), 0);
+  const discountAmount = subtotalSum - total;
+  const discountPercent = primary.discountPercent || 0;
+  const cashGivenLine = lines.find((x) => x.cashGiven != null);
+  const hasCashInfo = primary.paymentMethod !== 'Chuyển khoản' && cashGivenLine && cashGivenLine.cashGiven >= 0;
+  const changeAmount = hasCashInfo ? Math.max(0, cashGivenLine.cashGiven - total) : 0;
+  const paidAmount = lines.reduce((s, x) => s + getSalePaid(x), 0);
+  const debtAmount = lines.reduce((s, x) => s + getSaleDebt(x), 0);
+  const invoiceQr = resolveInvoiceQr(shop, { id: primary.orderId || primary.id }, total);
+  const invoiceNo = primary.invoiceNo || ('HD' + String(DB.getSales().findIndex((x) => x.id === primary.id) + 1).padStart(6, '0'));
+
+  const rowsHtml = lines
+    .map((s) => {
+      const item = DB.getItem(s.itemId);
+      const subtotal = s.sellPrice * s.quantity;
+      return `
+    <tr><td colspan="3">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</td></tr>
+    ${s.imei ? `<tr><td colspan="3">IMEI: ${escapeHtml(s.imei)}</td></tr>` : ''}
+    <tr>
+      <td>${formatMoney(s.sellPrice)}</td>
+      <td class="cc">${s.quantity}</td>
+      <td class="right">${formatMoney(subtotal)}</td>
+    </tr>`;
+    })
+    .join('');
+
+  const paper = getPrintPaperSize(shop.printPaperSize);
+  const isThermal = paper.value.endsWith('mm');
+  const pageSizeCss = isThermal ? `${paper.widthMm}mm auto` : paper.value;
+  const pageMarginCss = isThermal ? '3mm' : paper.value === 'A4' ? '14mm' : '10mm';
+  const bodyWidthCss = isThermal ? `${paper.widthMm - 4}mm` : paper.value === 'A4' ? '182mm' : '128mm';
+  const fs = paper.fontScale;
+  const popupWidth = isThermal ? 380 : 500;
+  const win = window.open('', '_blank', `width=${popupWidth},height=650`);
+  if (!win) {
+    toast('Trình duyệt đang chặn cửa sổ in. Hãy cho phép popup rồi bấm in lại.', true);
+    return;
+  }
+  win.document.write(`<!DOCTYPE html>
+<html lang="vi"><head><meta charset="UTF-8" />
+<title>Hoá đơn bán hàng</title>
+<style>
+  @page { size: ${pageSizeCss}; margin: ${pageMarginCss}; }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, 'Segoe UI', sans-serif; width: ${bodyWidthCss}; margin: 0 auto; padding: 6px; font-size: ${(13.5 * fs).toFixed(1)}px; line-height: 1.45; color: #000; }
+  .center { text-align: center; }
+  .shop-name { font-size: ${(19 * fs).toFixed(1)}px; font-weight: bold; }
+  hr { border: none; border-top: 1px dashed #000; margin: 8px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: ${(13.5 * fs).toFixed(1)}px; }
+  td, th { padding: 3px 0; vertical-align: top; text-align: left; }
+  th { font-weight: bold; font-size: ${(12.5 * fs).toFixed(1)}px; border-bottom: 1px solid #000; }
+  .right, td.right, th.right { text-align: right; }
+  .cc { text-align: center; }
+  .invoice-title { font-weight: bold; text-align: center; margin: 10px 0 2px; letter-spacing: 1px; font-size: ${(16 * fs).toFixed(1)}px; }
+  .section-gap { margin-top: 10px; }
+  .customer-block div { margin-bottom: 2px; }
+  .summary-block { width: 88%; margin: 10px auto 0; }
+  .summary-block .row-line { margin-bottom: 2px; }
+  .summary-block .row-line.grand { font-weight: bold; font-size: ${(15 * fs).toFixed(1)}px; margin-top: 4px; }
+  .footer { text-align: center; margin-top: 14px; font-size: ${(13 * fs).toFixed(1)}px; font-style: italic; }
+  .row-line { display: flex; justify-content: space-between; gap: 8px; }
+  .amount-words { text-align: center; font-style: italic; margin: 10px 0; font-size: ${(13 * fs).toFixed(1)}px; }
+  .warranty-box { font-size: ${(12.5 * fs).toFixed(1)}px; line-height: 1.6; margin-top: 14px; }
+  .warranty-box p { margin: 6px 0; }
+  .qr-box img { border: 1px solid #ccc; border-radius: 6px; }
+</style>
+</head>
+<body>
+  <div class="center">
+    ${shop.name ? `<div class="shop-name">${escapeHtml(shop.name)}</div>` : ''}
+    ${shop.address ? `<div>Địa chỉ: ${escapeHtml(shop.address)}</div>` : ''}
+    ${shop.phone ? `<div>Điện thoại: ${escapeHtml(shop.phone)}</div>` : ''}
+  </div>
+  <div class="invoice-title">HÓA ĐƠN BÁN HÀNG</div>
+  <div class="center">Số HĐ: ${escapeHtml(invoiceNo)}</div>
+  <div class="center">${formatDateVNFull(primary.date)}</div>
+  <div class="customer-block section-gap">
+    <div>Khách hàng: ${escapeHtml(primary.customerName || 'Khách lẻ')}</div>
+    ${primary.customerPhone ? `<div>SĐT: ${escapeHtml(primary.customerPhone)}</div>` : ''}
+    <div>Địa chỉ: ${primary.customerAddress ? escapeHtml(primary.customerAddress) : '-'}</div>
+    <div>Hình thức thanh toán: ${escapeHtml(primary.paymentMethod || 'Tiền mặt')}</div>
+  </div>
+  <table class="section-gap">
+    <tr><th>Đơn giá</th><th class="cc">SL</th><th class="right">Thành tiền</th></tr>
+    ${rowsHtml}
+  </table>
+  <hr />
+  <div class="summary-block">
+    <div class="row-line"><span>Tổng tiền hàng:</span><span>${formatMoney(subtotalSum)}</span></div>
+    <div class="row-line"><span>Chiết khấu ${discountPercent}%:</span><span>${formatMoney(discountAmount)}</span></div>
+    <div class="row-line grand"><span>Tổng thanh toán:</span><span>${formatMoney(total)}</span></div>
+    ${hasCashInfo ? `<div class="row-line"><span>Tiền khách đưa:</span><span>${formatMoney(cashGivenLine.cashGiven)}</span></div>` : ''}
+    ${hasCashInfo ? `<div class="row-line"><span>Tiền thừa trả khách:</span><span>${formatMoney(changeAmount)}</span></div>` : ''}
+    ${
+      debtAmount > 0
+        ? `<div class="row-line" style="margin-top:6px"><span>Đã thanh toán:</span><span>${formatMoney(paidAmount)}</span></div>
+    <div class="row-line grand"><span>CÒN NỢ LẠI:</span><span>${formatMoney(debtAmount)}</span></div>`
+        : ''
+    }
+  </div>
+  <div class="amount-words">(${soTienBangChu(total)} chẵn)</div>
+  ${primary.note ? `<div>Ghi chú: ${escapeHtml(primary.note)}</div>` : ''}
   ${
     invoiceQr
       ? `<div class="center qr-box section-gap">
@@ -3218,6 +4160,11 @@ function submitCustomerForm() {
     address: document.getElementById('f-c-address').value.trim(),
     note: document.getElementById('f-c-note').value.trim(),
   };
+  // Xác nhận rõ ràng trước khi GHI ĐÈ 1 khách hàng đã có — tránh lỡ bấm nhầm
+  // "Lưu" khi đang sửa mà làm mất/sai thông tin liên hệ cũ.
+  if (formDraft.editId) {
+    if (!confirmDialog(`Lưu thay đổi cho khách hàng "${name}"?`)) return;
+  }
   DB.saveCustomer(c);
   toast('Đã lưu khách hàng');
   closeSheet();
@@ -3364,6 +4311,11 @@ function submitTransactionForm() {
     category: document.getElementById('f-category').value.trim(),
     note: document.getElementById('f-note').value.trim(),
   };
+  // Xác nhận rõ ràng trước khi GHI ĐÈ 1 khoản thu/chi đã có — tránh lỡ bấm
+  // nhầm "Lưu" khi đang sửa mà làm sai lệch số liệu thu chi cũ.
+  if (formDraft.editId) {
+    if (!confirmDialog(`Lưu thay đổi cho khoản ${formDraft.txType === 'thu' ? 'thu' : 'chi'} này?`)) return;
+  }
   DB.saveTransaction(t);
   toast('Đã lưu');
   closeSheet();
@@ -3444,6 +4396,7 @@ function renderSettings(app) {
   const counts = {
     items: DB.getItems().length,
     purchases: DB.getPurchases().length,
+    purchaseReturns: DB.getPurchaseReturns().length,
     sales: DB.getSales().length,
     transactions: DB.getTransactions().length,
     customers: DB.getCustomers().length,
@@ -3453,7 +4406,7 @@ function renderSettings(app) {
     ${backToMoreLink()}
     <div class="settings-item">
       <h3>📦 Dữ liệu hiện có</h3>
-      <p>${counts.items} mặt hàng · ${counts.purchases} lần nhập · ${counts.sales} lần bán · ${counts.transactions} khoản thu/chi · ${counts.customers} khách hàng</p>
+      <p>${counts.items} mặt hàng · ${counts.purchases} lần nhập · ${counts.purchaseReturns} lần trả hàng NCC · ${counts.sales} lần bán · ${counts.transactions} khoản thu/chi · ${counts.customers} khách hàng</p>
     </div>
     <div class="settings-item">
       <h3>🔗 Gộp mặt hàng trùng tên thành 1 mã</h3>
@@ -4306,7 +5259,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=30').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=31').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
