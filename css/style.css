@@ -119,6 +119,7 @@ html, body {
 .badge.chi { background: #fee2e2; color: #b91c1c; }
 .badge.nhap { background: #fef3c7; color: #b45309; }
 .badge.ban { background: #dbeafe; color: #1d4ed8; }
+.badge.tra { background: #ffedd5; color: #c2410c; }
 
 .empty-state { text-align: center; color: var(--muted); padding: 40px 20px; font-size: 14px; }
 
