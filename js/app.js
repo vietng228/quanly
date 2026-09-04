@@ -156,12 +156,17 @@ const state = {
   saleCustomStart: todayStr(),
   saleCustomEnd: todayStr(),
   saleSearch: '',
+  purchaseReturnPeriod: 'all',
+  purchaseReturnCustomStart: todayStr(),
+  purchaseReturnCustomEnd: todayStr(),
+  purchaseReturnSearch: '',
 };
 
 const TITLES = {
   dashboard: 'Tổng quan',
   sales: 'Bán hàng',
   purchases: 'Nhập hàng',
+  purchaseReturns: 'Trả hàng nhập',
   customers: 'Khách hàng',
   more: 'Thêm',
   items: 'Mặt hàng',
@@ -172,7 +177,7 @@ const TITLES = {
 };
 
 // các tab con nằm trong menu "Thêm"
-const MORE_SUBTABS = ['customers', 'inventory', 'lookup', 'cashflow', 'settings'];
+const MORE_SUBTABS = ['customers', 'inventory', 'purchaseReturns', 'lookup', 'cashflow', 'settings'];
 
 let formDraft = {}; // dữ liệu tạm khi đang mở form trong sheet
 
@@ -283,6 +288,7 @@ function render() {
   if (state.tab === 'dashboard') renderDashboard(app);
   else if (state.tab === 'sales') renderSales(app);
   else if (state.tab === 'purchases') renderPurchases(app);
+  else if (state.tab === 'purchaseReturns') renderPurchaseReturns(app);
   else if (state.tab === 'customers') renderCustomers(app);
   else if (state.tab === 'more') renderMore(app);
   else if (state.tab === 'items') renderItems(app);
@@ -312,6 +318,7 @@ function onAppClick(e) {
     'view-out-of-stock-items': openOutOfStockItemsSheet,
     'set-purchase-period': () => { state.purchasePeriod = t.dataset.period; render(); },
     'set-sale-period': () => { state.salePeriod = t.dataset.period; render(); },
+    'set-purchase-return-period': () => { state.purchaseReturnPeriod = t.dataset.period; render(); },
     'scan-for-item-search': () => {
       Scanner.open((code) => {
         state.itemSearch = code;
@@ -330,6 +337,12 @@ function onAppClick(e) {
     'scan-for-purchase-search': () => {
       Scanner.open((code) => {
         state.purchaseSearch = code;
+        render();
+      });
+    },
+    'scan-for-purchase-return-search': () => {
+      Scanner.open((code) => {
+        state.purchaseReturnSearch = code;
         render();
       });
     },
@@ -362,6 +375,7 @@ function onAppClick(e) {
     'delete-purchase-return': () => {
       if (confirmDialog('Xoá lần trả hàng NCC này?')) { DB.deletePurchaseReturn(id); toast('Đã xoá'); render(); }
     },
+    'view-purchase-return-detail': () => openPurchaseReturnDetailSheet(id),
     'add-sale': () => openSaleForm(null),
     'view-sale-detail': () => openSaleDetailSheet(id),
     'edit-sale': () => openSaleForm(DB.getSales().find((s) => s.id === id)),
@@ -1339,6 +1353,49 @@ function openSaleDetailSheet(saleId) {
   `);
 }
 
+// Sheet chi tiết 1 LẦN TRẢ HÀNG NHẬP cho NCC cụ thể — bấm vào 1 dòng ở màn
+// "Trả hàng nhập" riêng sẽ mở đây, mirror cấu trúc openSaleDetailSheet: tên
+// mặt hàng, ngày/ghi chú, SL×giá hoàn/thành tiền, IMEI đã trả (bấm vào 1 mã
+// để xem đầy đủ lịch sử nhập+bán+trả của máy đó qua openImeiDetailSheet),
+// link sang tồn kho mặt hàng, và nút sửa/xoá (dùng lại action sẵn có).
+function openPurchaseReturnDetailSheet(returnId) {
+  const r = DB.getPurchaseReturns().find((x) => x.id === returnId);
+  if (!r) { toast('Không tìm thấy lần trả hàng này', true); return; }
+  const item = DB.getItem(r.itemId);
+  const total = r.costPrice * r.quantity;
+
+  const imeiList = (r.imei || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const imeiHtml = imeiList.length
+    ? `<div class="section-title" style="margin-top:14px">🔢 IMEI / Số seri đã trả (${imeiList.length})</div>
+    <div class="chip-row" style="flex-wrap:wrap">
+      ${imeiList.map((im) => `<span class="chip" style="background:#ffedd5; border-color:#c2410c; color:#c2410c; cursor:pointer" data-action="view-imei-detail" data-imei="${escapeHtml(im)}">${escapeHtml(im)}</span>`).join('')}
+    </div>
+    <p class="help-text" style="margin:6px 0 0">Bấm vào 1 mã để xem đầy đủ lịch sử nhập + bán + trả của máy đó.</p>`
+    : '';
+
+  openSheet(`
+    <div class="sheet-title">↩️ Trả hàng nhập · ${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</div>
+    <p class="help-text" style="margin-top:-8px">${formatDateVN(r.date)}</p>
+    <div class="stat-grid" style="margin-top:8px">
+      <div class="stat-card"><div class="label">Số lượng × Giá hoàn</div><div class="value" style="font-size:16px">${r.quantity} × ${formatMoney(r.costPrice)}</div></div>
+      <div class="stat-card"><div class="label">Thành tiền</div><div class="value neg">${formatMoney(total)}</div></div>
+    </div>
+    ${imeiHtml}
+    ${r.note ? `<div class="section-title" style="margin-top:14px">📝 Ghi chú</div><p class="help-text" style="margin:0">${escapeHtml(r.note)}</p>` : ''}
+    ${item ? `<div class="list-item" data-action="view-item-stock" data-name="${escapeHtml(item.name)}" style="cursor:pointer; margin-top:14px">
+      <div class="item-icon">${categoryIcon(item.category)}</div>
+      <div class="li-main">
+        <div class="li-title">${escapeHtml(item.name)}</div>
+        <div class="li-sub">Bấm để xem tồn kho / lịch sử của mặt hàng này ›</div>
+      </div>
+    </div>` : ''}
+    <div class="btn-row" style="margin-top:14px">
+      <button class="btn btn-secondary" data-action="edit-purchase-return" data-id="${r.id}">✏️ Sửa</button>
+      <button class="btn btn-danger" data-action="delete-purchase-return" data-id="${r.id}">🗑️ Xoá</button>
+    </div>
+  `);
+}
+
 // Gộp thật sự nhiều bản ghi mặt hàng trùng tên thành 1 mã duy nhất: chuyển
 // toàn bộ phiếu nhập/bán của các mã bị gộp sang mã "chính" (mã tạo sớm nhất),
 // tự backfill các trường còn thiếu (mã vạch/mã SP/model/giá mặc định) từ các
@@ -2126,9 +2183,7 @@ function renderLookup(app) {
           const item = DB.getItem(r.itemId);
           const rowAction = r.imei
             ? `data-action="view-imei-detail" data-imei="${escapeHtml((r.imei || '').split(',')[0].trim())}"`
-            : item
-            ? `data-action="view-item-stock" data-name="${escapeHtml(item.name)}"`
-            : '';
+            : `data-action="view-purchase-return-detail" data-id="${r.id}"`;
           return `
         <div class="list-item" ${rowAction} style="${rowAction ? 'cursor:pointer' : ''}">
           <div class="item-icon">${categoryIcon(item?.category)}</div>
@@ -2426,6 +2481,93 @@ function renderPurchases(app) {
     updateList();
   });
   if (state.purchasePeriod === 'custom') wireCustomRangeInputs('purchase');
+}
+
+// ---------------------------------------------------------------------
+// "Trả hàng nhập" — mục riêng, quản lý đầy đủ như Nhập hàng/Bán hàng: tab
+// thời gian, tìm kiếm, thống kê tổng quan, danh sách theo ngày, bấm vào 1
+// dòng để xem chi tiết (theo dõi đầy đủ theo IMEI). Dữ liệu vẫn dùng chung
+// DB.getPurchaseReturns() như trước (renderPurchases vẫn giữ nguyên hiển thị
+// gộp chung với Nhập hàng để tiện đối chiếu — màn này KHÔNG thay thế mà bổ
+// sung 1 góc nhìn tập trung riêng cho trả hàng NCC).
+// ---------------------------------------------------------------------
+function renderPurchaseReturns(app) {
+  const periodRows = filterRowsByPeriodState(DB.getPurchaseReturns(), 'purchaseReturn');
+
+  app.innerHTML = `
+    ${backToMoreLink()}
+    ${periodTabsHtml('purchaseReturn', 'set-purchase-return-period')}
+    ${state.purchaseReturnPeriod === 'custom' ? customRangeHtml('purchaseReturn') : ''}
+    <div class="input-with-btn" style="margin-bottom:12px">
+      <input type="text" class="searchbox" style="margin-bottom:0" id="purchase-return-search" placeholder="🔍 Tìm theo tên, mã SP, mã vạch, ghi chú, IMEI..." value="${escapeHtml(state.purchaseReturnSearch || '')}" />
+      <button type="button" data-action="scan-for-purchase-return-search">📷</button>
+    </div>
+    <div id="purchase-return-summary"></div>
+    <div id="stock-list"></div>
+    <button class="fab" data-action="add-purchase-return">+</button>
+  `;
+
+  function updateList() {
+    const q = (state.purchaseReturnSearch || '').toLowerCase();
+    const rows = periodRows.filter((r) => {
+      if (!q) return true;
+      const item = DB.getItem(r.itemId);
+      return (
+        (item?.name || '').toLowerCase().includes(q) ||
+        (item?.productCode || '').toLowerCase().includes(q) ||
+        (item?.barcode || '').toLowerCase().includes(q) ||
+        (r.note || '').toLowerCase().includes(q) ||
+        (r.imei || '').toLowerCase().includes(q)
+      );
+    });
+    const summaryEl = document.getElementById('purchase-return-summary');
+    const totalReturn = rows.reduce((s, r) => s + r.costPrice * r.quantity, 0);
+    summaryEl.innerHTML = `<div class="stat-grid" style="margin-bottom:10px">
+      <div class="stat-card"><div class="label">Số lần trả</div><div class="value">${rows.length}</div></div>
+      <div class="stat-card"><div class="label">Tổng giá trị đã trả NCC</div><div class="value neg">${formatMoney(totalReturn)}</div></div>
+    </div>`;
+
+    const listEl = document.getElementById('stock-list');
+    if (rows.length === 0) {
+      listEl.innerHTML = `<div class="empty-state">Không có lần trả hàng nhập nào phù hợp.<br/>Bấm nút + để trả hàng cho NCC.</div>`;
+      return;
+    }
+    listEl.innerHTML = groupRowsByDate(rows)
+      .map(({ date, rows: dayRows }) => {
+        const header = dateGroupHeaderHtml(date, dayRows, (r) => -r.costPrice * r.quantity);
+        const items = dayRows
+          .map((r) => {
+            const item = DB.getItem(r.itemId);
+            return `
+          <div class="list-item">
+            <div class="item-icon" data-action="view-purchase-return-detail" data-id="${r.id}">${categoryIcon(item?.category)}</div>
+            <div class="li-main" data-action="view-purchase-return-detail" data-id="${r.id}">
+              <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')} <span class="badge tra">↩️ Trả NCC</span></div>
+              <div class="li-sub">SL ${r.quantity} × ${formatMoney(r.costPrice)}${r.note ? ' · ' + escapeHtml(r.note) : ''}</div>
+              ${r.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(r.imei)}</div>` : ''}
+            </div>
+            <div class="li-right">
+              <div class="li-amount neg">-${formatMoney(r.costPrice * r.quantity)}</div>
+              <div class="li-actions">
+                <button class="icon-btn" data-action="edit-purchase-return" data-id="${r.id}">✏️</button>
+                <button class="icon-btn" data-action="delete-purchase-return" data-id="${r.id}">🗑️</button>
+              </div>
+            </div>
+          </div>`;
+          })
+          .join('');
+        return header + items;
+      })
+      .join('');
+  }
+
+  updateList();
+  const searchEl = document.getElementById('purchase-return-search');
+  searchEl.addEventListener('input', () => {
+    state.purchaseReturnSearch = searchEl.value;
+    updateList();
+  });
+  if (state.purchaseReturnPeriod === 'custom') wireCustomRangeInputs('purchaseReturn');
 }
 
 function itemPickBoxHtml(item) {
@@ -4241,6 +4383,10 @@ function renderMore(app) {
       <div class="li-main"><div class="li-title">📊 Tồn kho</div><div class="li-sub">Số lượng còn lại theo mặt hàng (tự tính từ nhập/bán)</div></div>
       <span>›</span>
     </div>
+    <div class="list-item" data-action="go-tab" data-tab="purchaseReturns">
+      <div class="li-main"><div class="li-title">↩️ Trả hàng nhập</div><div class="li-sub">Lịch sử trả hàng cho nhà cung cấp, tra cứu theo IMEI</div></div>
+      <span>›</span>
+    </div>
     <div class="list-item" data-action="go-tab" data-tab="lookup">
       <div class="li-main"><div class="li-title">🔍 Tra cứu</div><div class="li-sub">Tìm theo IMEI máy hoặc số điện thoại khách</div></div>
       <span>›</span>
@@ -5316,7 +5462,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=32').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=33').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
