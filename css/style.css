@@ -247,3 +247,9 @@ html, body {
 }
 .settings-item h3 { margin: 0 0 6px; font-size: 14px; }
 .settings-item p { margin: 0 0 10px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+/* Quyền truy cập và trạng thái đang đồng bộ với GitHub. */
+[hidden] { display: none !important; }
+.access-busy #app, .access-busy .sheet-overlay, .access-busy .bottomnav { pointer-events: none; }
+.access-busy { cursor: progress; }
+.lookup-period-tabs { flex-wrap: wrap; }
+.lookup-period-tabs button { flex: 1 0 calc(25% - 6px); }
