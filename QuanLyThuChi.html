@@ -266,8 +266,8 @@ html, body {
 [hidden] { display: none !important; }
 .access-busy #app, .access-busy .sheet-overlay, .access-busy .bottomnav { pointer-events: none; }
 .access-busy { cursor: progress; }
-.lookup-period-tabs { flex-wrap: wrap; }
-.lookup-period-tabs button { flex: 1 0 calc(25% - 6px); }
+.date-period-tabs { flex-wrap: wrap; }
+.date-period-tabs button { flex: 1 0 calc(25% - 6px); }
 
 </style>
 </head>
@@ -3984,6 +3984,8 @@ const state = {
   customStart: todayStr(),
   customEnd: todayStr(),
   cashPeriod: 'all',
+  cashCustomStart: todayStr(),
+  cashCustomEnd: todayStr(),
   itemSearch: '',
   itemCategoryFilter: 'all',
   customerSearch: '',
@@ -4731,17 +4733,8 @@ function computeStats(period) {
 function renderDashboard(app) {
   const s = computeStats(state.period);
   const totalDebt = computeTotalDebt(); // công nợ là số dư luỹ kế, không tính theo kỳ đang chọn
-  const periodBtn = (p, label) =>
-    `<button class="${state.period === p ? 'active' : ''}" data-action="set-period" data-period="${p}">${label}</button>`;
-
   app.innerHTML = `
-    <div class="period-tabs">
-      ${periodBtn('day', 'Hôm nay')}
-      ${periodBtn('week', 'Tuần này')}
-      ${periodBtn('month', 'Tháng này')}
-      ${periodBtn('all', 'Tất cả')}
-      ${periodBtn('custom', '📅 Tuỳ chỉnh')}
-    </div>
+    ${periodTabsHtml('', 'set-period')}
     ${
       state.period === 'custom'
         ? `<div class="form-row" style="margin-bottom:14px">
@@ -6186,16 +6179,16 @@ function filterRowsByPeriodState(rows, prefix) {
   return rows.filter((r) => isInRange(r.date, start, end));
 }
 function periodTabsHtml(prefix, actionName) {
-  const cur = state[prefix + 'Period'];
+  const cur = prefix ? state[prefix + 'Period'] : state.period;
   const btn = (p, label) =>
     `<button class="${cur === p ? 'active' : ''}" data-action="${actionName}" data-period="${p}">${label}</button>`;
-  return `<div class="period-tabs${prefix === 'lookup' ? ' lookup-period-tabs' : ''}">
+  return `<div class="period-tabs date-period-tabs">
     ${btn('day', 'Hôm nay')}
-    ${prefix === 'lookup' ? btn('yesterday', 'Hôm qua') : ''}
+    ${btn('yesterday', 'Hôm qua')}
     ${btn('week', 'Tuần này')}
-    ${prefix === 'lookup' ? btn('lastWeek', 'Tuần trước') : ''}
+    ${btn('lastWeek', 'Tuần trước')}
     ${btn('month', 'Tháng này')}
-    ${prefix === 'lookup' ? btn('lastMonth', 'Tháng trước') : ''}
+    ${btn('lastMonth', 'Tháng trước')}
     ${btn('all', 'Tất cả')}
     ${btn('custom', '📅 Tuỳ chỉnh')}
   </div>`;
@@ -8261,22 +8254,15 @@ function renderMore(app) {
 // CASHFLOW (Thu chi độc lập)
 // ---------------------------------------------------------------------
 function renderCashflow(app) {
-  const { start, end } = getPeriodRange(state.cashPeriod);
+  const { start, end } = getStateDateRange('cash');
   const rows = DB.getTransactions().filter((t) => isInRange(t.date, start, end));
   const thu = rows.filter((t) => t.type === 'thu').reduce((s, t) => s + t.amount, 0);
   const chi = rows.filter((t) => t.type === 'chi').reduce((s, t) => s + t.amount, 0);
 
-  const periodBtn = (p, label) =>
-    `<button class="${state.cashPeriod === p ? 'active' : ''}" data-action="set-cash-period" data-period="${p}">${label}</button>`;
-
   app.innerHTML = `
     ${backToMoreLink()}
-    <div class="period-tabs">
-      ${periodBtn('day', 'Hôm nay')}
-      ${periodBtn('week', 'Tuần này')}
-      ${periodBtn('month', 'Tháng này')}
-      ${periodBtn('all', 'Tất cả')}
-    </div>
+    ${periodTabsHtml('cash', 'set-cash-period')}
+    ${state.cashPeriod === 'custom' ? customRangeHtml('cash') : ''}
     <div class="stat-grid">
       <div class="stat-card">
         <div class="label">Tổng thu</div>
@@ -8290,6 +8276,7 @@ function renderCashflow(app) {
     <div id="tx-list" style="margin-top:12px"></div>
     <button class="fab" data-action="add-transaction">+</button>
   `;
+  wireCustomRangeInputs('cash');
   const listEl = document.getElementById('tx-list');
   listEl.innerHTML =
     rows.length === 0
@@ -9317,7 +9304,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=42').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=43').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 

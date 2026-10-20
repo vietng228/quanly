@@ -251,5 +251,5 @@ html, body {
 [hidden] { display: none !important; }
 .access-busy #app, .access-busy .sheet-overlay, .access-busy .bottomnav { pointer-events: none; }
 .access-busy { cursor: progress; }
-.lookup-period-tabs { flex-wrap: wrap; }
-.lookup-period-tabs button { flex: 1 0 calc(25% - 6px); }
+.date-period-tabs { flex-wrap: wrap; }
+.date-period-tabs button { flex: 1 0 calc(25% - 6px); }
