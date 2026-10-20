@@ -23,9 +23,13 @@ Token cần quyền đọc/ghi Contents của repo dữ liệu private. Không �
 - Đăng nhập admin → **Thêm → Quản lý tài khoản**.
 - Điền tên đăng nhập, mật khẩu → **Tạo nhân viên**.
 - Có thể khóa/mở khóa và đổi mật khẩu nhân viên tại đây.
+- Bấm **Phân quyền** bên cạnh nhân viên → chọn quyền **Thêm mới / Sửa / Xóa** cho từng mục và **Xem báo cáo Tổng quan** → **Lưu quyền**.
+- Nhân viên mới và tài khoản cũ chưa được tùy chỉnh mặc định chỉ được tạo đơn bán, phiếu nhập và khách hàng. Bỏ hết lựa chọn sẽ thu hồi toàn bộ quyền ghi dữ liệu.
+- Quyền được lưu chung trong repo private và áp dụng trên máy nhân viên khi đồng bộ. Quản lý tài khoản, cấu hình, nhập Excel và backup/restore vẫn chỉ dành cho admin.
+- Quyền sửa hóa đơn bán hàng bao gồm thu nợ; nhân viên vẫn được xem danh mục, tồn kho và lịch sử như trước.
 - Mật khẩu được băm PBKDF2 cùng salt riêng, không lưu dạng văn bản. Không thể xem lại mật khẩu cũ; admin đặt lại khi cần.
 
-| Chức năng | Nhân viên | Admin |
+| Chức năng | Nhân viên mặc định | Admin |
 | --- | --- | --- |
 | Bán hàng, tạo đơn, in hóa đơn | Có | Có |
 | Nhập hàng cho mặt hàng đã có | Có | Có |
@@ -33,7 +37,8 @@ Token cần quyền đọc/ghi Contents của repo dữ liệu private. Không �
 | Xem mặt hàng, tồn kho, tra cứu | Có | Có |
 | Sửa/xóa hóa đơn, phiếu nhập, khách hàng | Không | Có |
 | Thêm/sửa/xóa mặt hàng, trả NCC | Không | Có |
-| Tổng quan, thu chi, thu nợ, cấu hình | Không | Có |
+| Tổng quan, thu chi, thu nợ | Admin có thể cấp | Có |
+| Cấu hình | Không | Có |
 | Quản lý tài khoản, nhập Excel, backup/restore | Không | Có |
 
 ## 4. Đăng nhập trên điện thoại khác
@@ -43,7 +48,7 @@ Token cần quyền đọc/ghi Contents của repo dữ liệu private. Không �
 3. Khi tải xong dữ liệu, app hiện màn đăng nhập. Nhân viên nhập tài khoản được cấp; không tạo admin mới.
 4. Cấu hình được nhớ trên thiết bị. Các lần sau không phải nhập lại token. Nhân viên không có mục Cài đặt trong giao diện.
 
-Có thể thêm link Pages vào màn hình chính bằng tính năng **Thêm vào màn hình chính** của trình duyệt. Phiên đăng nhập có thời hạn 8 giờ và dùng trong phiên trình duyệt; đóng trình duyệt có thể cần đăng nhập lại.
+Có thể thêm link Pages vào màn hình chính bằng tính năng **Thêm vào màn hình chính** của trình duyệt. Chọn **Ghi nhớ đăng nhập trên thiết bị này** để mở lại vẫn đăng nhập. Bỏ chọn thì phiên tạm có thời hạn 8 giờ trong tab. Đăng xuất hoặc xóa dữ liệu trình duyệt sẽ xóa phiên đã nhớ.
 
 ## 5. Trả NCC và đồng bộ
 
