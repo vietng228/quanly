@@ -220,7 +220,7 @@ const Cloud = {
   // nhất thay vì tạo hàng trăm commit riêng lẻ.
   scheduleFlush() {
     if (!this.isConfigured()) return;
-    if (this._applying) return; // đang nạp dữ liệu TỪ cloud xuống, không phải người dùng sửa
+    if (this._applying || (window.Access && Access.running)) return; // đang nạp dữ liệu TỪ cloud xuống, không phải người dùng sửa
     this._dirty = true;
     if (this._flushTimer) clearTimeout(this._flushTimer);
     this._flushTimer = setTimeout(() => this._flush(), 900);
@@ -255,6 +255,9 @@ const Cloud = {
       'deleteItem',
       'savePurchase',
       'deletePurchase',
+      'savePurchaseReturn',
+      'deletePurchaseReturn',
+      'saveAccess',
       'saveSale',
       'deleteSale',
       'saveCustomer',

@@ -124,6 +124,24 @@ function getPeriodRange(period) {
   if (period === 'day') {
     return { start: todayISO, end: todayISO, label: `Hôm nay (${formatDateVN(todayISO)})` };
   }
+  if (period === 'yesterday') {
+    const d = new Date(now);
+    d.setDate(d.getDate() - 1);
+    const date = toISODate(d);
+    return { start: date, end: date, label: 'Hôm qua' };
+  }
+  if (period === 'lastWeek') {
+    const start = startOfWeek(now);
+    const end = new Date(start);
+    end.setDate(end.getDate() - 1);
+    start.setDate(start.getDate() - 7);
+    return { start: toISODate(start), end: toISODate(end), label: 'Tuần trước' };
+  }
+  if (period === 'lastMonth') {
+    const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const end = new Date(now.getFullYear(), now.getMonth(), 0);
+    return { start: toISODate(start), end: toISODate(end), label: 'Tháng trước' };
+  }
   if (period === 'week') {
     const s = startOfWeek(now);
     const sISO = toISODate(s);
@@ -158,6 +176,7 @@ function escapeHtml(str) {
 }
 
 function toast(msg, isError = false) {
+  if (window.Access && Access.defer(() => toast(msg, isError))) return;
   const el = document.getElementById('toast');
   if (!el) return;
   el.textContent = msg;

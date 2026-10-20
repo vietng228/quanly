@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
 <title>Quản Lý Thu Chi &amp; Bán Hàng</title>
 <meta name="theme-color" content="#2563eb" />
-<meta name="description" content="App quản lý thu chi, nhập hàng, bán hàng offline cho cửa hàng nhỏ" />
+<meta name="description" content="Quản lý thu chi, nhập hàng, bán hàng và phân quyền nhân viên, đồng bộ GitHub trực tiếp" />
 <link rel="manifest" href="manifest.json" />
 <link rel="icon" href="icons/icon-192.png" />
 <link rel="apple-touch-icon" href="icons/icon-apple.png" />
@@ -262,6 +262,12 @@ html, body {
 }
 .settings-item h3 { margin: 0 0 6px; font-size: 14px; }
 .settings-item p { margin: 0 0 10px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+/* Quyền truy cập và trạng thái đang đồng bộ với GitHub. */
+[hidden] { display: none !important; }
+.access-busy #app, .access-busy .sheet-overlay, .access-busy .bottomnav { pointer-events: none; }
+.access-busy { cursor: progress; }
+.lookup-period-tabs { flex-wrap: wrap; }
+.lookup-period-tabs button { flex: 1 0 calc(25% - 6px); }
 
 </style>
 </head>
@@ -2797,6 +2803,24 @@ function getPeriodRange(period) {
   if (period === 'day') {
     return { start: todayISO, end: todayISO, label: `Hôm nay (${formatDateVN(todayISO)})` };
   }
+  if (period === 'yesterday') {
+    const d = new Date(now);
+    d.setDate(d.getDate() - 1);
+    const date = toISODate(d);
+    return { start: date, end: date, label: 'Hôm qua' };
+  }
+  if (period === 'lastWeek') {
+    const start = startOfWeek(now);
+    const end = new Date(start);
+    end.setDate(end.getDate() - 1);
+    start.setDate(start.getDate() - 7);
+    return { start: toISODate(start), end: toISODate(end), label: 'Tuần trước' };
+  }
+  if (period === 'lastMonth') {
+    const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const end = new Date(now.getFullYear(), now.getMonth(), 0);
+    return { start: toISODate(start), end: toISODate(end), label: 'Tháng trước' };
+  }
   if (period === 'week') {
     const s = startOfWeek(now);
     const sISO = toISODate(s);
@@ -2831,6 +2855,7 @@ function escapeHtml(str) {
 }
 
 function toast(msg, isError = false) {
+  if (window.Access && Access.defer(() => toast(msg, isError))) return;
   const el = document.getElementById('toast');
   if (!el) return;
   el.textContent = msg;
@@ -2858,6 +2883,7 @@ const DB_KEYS = {
   transactions: DB_PREFIX + 'transactions',
   customers: DB_PREFIX + 'customers',
   meta: DB_PREFIX + 'meta',
+  access: DB_PREFIX + 'access',
 };
 
 function uid() {
@@ -2940,7 +2966,7 @@ const DB = {
     writeList(DB_KEYS.purchases, list);
     // cập nhật giá nhập gần nhất & mặc định cho item
     const item = DB.getItem(p.itemId);
-    if (item) {
+    if (item && (!window.Access || Access.isAdmin())) {
       item.lastCostPrice = p.costPrice;
       DB.saveItem(item);
     }
@@ -3047,6 +3073,8 @@ const DB = {
       app: 'quan-ly-thu-chi-ban-hang',
       version: 1,
       exportedAt: new Date().toISOString(),
+      shopInfo: DB.getShopInfo(),
+      access: DB.getAccess(),
       data: {
         items: readList(DB_KEYS.items),
         purchases: readList(DB_KEYS.purchases),
@@ -3061,6 +3089,8 @@ const DB = {
     if (!payload || !payload.data) throw new Error('File backup không hợp lệ');
     const { items = [], purchases = [], purchaseReturns = [], sales = [], transactions = [], customers = [] } = payload.data;
     if (mode === 'replace') {
+      if (payload.shopInfo) DB.saveShopInfo(payload.shopInfo);
+      if (payload.access) DB.saveAccess(payload.access);
       writeList(DB_KEYS.items, items);
       writeList(DB_KEYS.purchases, purchases);
       writeList(DB_KEYS.purchaseReturns, purchaseReturns);
@@ -3092,6 +3122,14 @@ const DB = {
     writeList(DB_KEYS.sales, []);
     writeList(DB_KEYS.transactions, []);
     writeList(DB_KEYS.customers, []);
+  },
+
+  getAccess() {
+    try { return JSON.parse(localStorage.getItem(DB_KEYS.access)) || { users: [] }; }
+    catch { return { users: [] }; }
+  },
+  saveAccess(access) {
+    localStorage.setItem(DB_KEYS.access, JSON.stringify(access));
   },
 
   // ---------- THÔNG TIN CỬA HÀNG (hiện trên hoá đơn in) ----------
@@ -3335,7 +3373,7 @@ const Cloud = {
   // nhất thay vì tạo hàng trăm commit riêng lẻ.
   scheduleFlush() {
     if (!this.isConfigured()) return;
-    if (this._applying) return; // đang nạp dữ liệu TỪ cloud xuống, không phải người dùng sửa
+    if (this._applying || (window.Access && Access.running)) return; // đang nạp dữ liệu TỪ cloud xuống, không phải người dùng sửa
     this._dirty = true;
     if (this._flushTimer) clearTimeout(this._flushTimer);
     this._flushTimer = setTimeout(() => this._flush(), 900);
@@ -3370,6 +3408,9 @@ const Cloud = {
       'deleteItem',
       'savePurchase',
       'deletePurchase',
+      'savePurchaseReturn',
+      'deletePurchaseReturn',
+      'saveAccess',
       'saveSale',
       'deleteSale',
       'saveCustomer',
@@ -3407,6 +3448,276 @@ const Cloud = {
 };
 
 window.Cloud = Cloud;
+
+</script>
+<script>
+/* Phân quyền trong app dành cho GitHub Pages; đồng bộ trực tiếp repo private. */
+const Access = {
+  session: null,
+  settingUp: false,
+  running: false,
+  dirty: false,
+  effects: [],
+  get user() {
+    if (!this.session || this.session.expires < Date.now()) return null;
+    return DB.getAccess().users.find(user => user.id === this.session.id && user.version === this.session.version && !user.disabled) || null;
+  },
+  isAdmin() { return this.settingUp || this.user?.role === 'admin'; },
+  async credentials(password, salt) {
+    const bytes = salt ? Uint8Array.from(salt.match(/../g), part => parseInt(part, 16)) : crypto.getRandomValues(new Uint8Array(16));
+    const hex = value => Array.from(new Uint8Array(value), byte => byte.toString(16).padStart(2, '0')).join('');
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: bytes, iterations: 210000, hash: 'SHA-256' }, key, 256);
+    return { salt: hex(bytes), hash: hex(bits) };
+  },
+  validate(username, password) {
+    if (!/^[\w.-]{3,40}$/.test(username)) throw new Error('Tên đăng nhập gồm 3–40 chữ, số, dấu . _ -');
+    if (password.length < 8 || password.length > 128) throw new Error('Mật khẩu cần 8–128 ký tự.');
+  },
+  signIn(user) {
+    this.session = { id: user.id, version: user.version, expires: Date.now() + 8 * 3600000 };
+    sessionStorage.setItem('qls_session', JSON.stringify(this.session));
+  },
+  wrapDB() {
+    const creates = { saveSale: 'getSales', savePurchase: 'getPurchases', saveCustomer: 'getCustomers' };
+    for (const name of ['saveItem', 'deleteItem', 'savePurchase', 'deletePurchase', 'savePurchaseReturn', 'deletePurchaseReturn',
+      'saveSale', 'deleteSale', 'saveCustomer', 'deleteCustomer', 'saveTransaction', 'deleteTransaction', 'saveShopInfo', 'saveAccess', 'importAll', 'clearAll']) {
+      const original = DB[name];
+      DB[name] = (...args) => {
+        if (!Cloud._applying) {
+          if (!this.isAdmin()) {
+            const getter = creates[name];
+            if (!this.user || !getter || DB[getter]().some(row => row.id === args[0]?.id)) throw new Error('Bạn không có quyền sửa/xóa dữ liệu này.');
+          }
+          this.dirty = true;
+        }
+        return original.apply(DB, args);
+      };
+    }
+  },
+  async run(action) {
+    if (this.running || Cloud._flushing) { toast('Đang đồng bộ, vui lòng chờ.'); return false; }
+    const snapshot = DB.exportAll();
+    this.running = true;
+    this.dirty = false;
+    this.effects = [];
+    let effects = [];
+    let success = false;
+    document.body.classList.add('access-busy');
+    try {
+      await action();
+      if (this.dirty && Cloud.isConfigured()) {
+        Cloud._dirty = true;
+        const result = await Cloud.push('Cập nhật dữ liệu từ app');
+        if (!result.ok) throw Object.assign(new Error(result.error || 'Dữ liệu vừa thay đổi trên máy khác. Vui lòng thử lại.'), { conflict: result.conflict });
+      }
+      effects = this.effects;
+      success = true;
+    } catch (error) {
+      Cloud._applying = true;
+      try { DB.importAll(snapshot, 'replace'); } finally { Cloud._applying = false; }
+      Cloud._dirty = false;
+      this.running = false;
+      if (error.conflict) await Cloud.pullLatest();
+      Cloud._setStatus('error', error.message);
+      toast('Chưa xác nhận lưu: ' + error.message, true);
+    } finally {
+      this.running = false;
+      this.dirty = false;
+      this.effects = [];
+      document.body.classList.remove('access-busy');
+    }
+    if (success) {
+      try { for (const effect of effects) effect(); this.decorate(); }
+      catch { toast('Đã lưu dữ liệu. Vui lòng tải lại giao diện.', true); }
+    }
+    return success;
+  },
+  dispatch(action, callback) {
+    if (/^(delete-|submit-|save-shop-info|remove-shop-qr|do-clear-all|do-merge-duplicates|do-recompute-sale-costs|merge-item)/.test(action)) return this.run(callback);
+    if (!this.running) return callback();
+  },
+  defer(effect) {
+    if (!this.running) return false;
+    this.effects.push(effect);
+    return true;
+  },
+  async connection(message = '') {
+    document.getElementById('bottomnav').hidden = true;
+    document.getElementById('topbar-title').textContent = 'Kết nối dữ liệu cửa hàng';
+    document.getElementById('app').innerHTML = `<div class="settings-item"><h3>Đồng bộ GitHub</h3>
+      <p>Nhập repo private và token như ở app cũ. Cấu hình một lần trên mỗi điện thoại.</p>
+      <p id="connect-error" role="alert">${escapeHtml(message)}</p>
+      <form id="connect-form">
+        <div class="form-group"><label>Chủ repo (owner)</label><input name="owner" required value="${escapeHtml(Cloud.getConfig()?.owner || '')}" placeholder="vietng228"></div>
+        <div class="form-group"><label>Repo dữ liệu private</label><input name="repo" required value="${escapeHtml(Cloud.getConfig()?.repo || '')}"></div>
+        <div class="form-group"><label>Nhánh</label><input name="branch" required value="${escapeHtml(Cloud.getConfig()?.branch || 'main')}"></div>
+        <div class="form-group"><label>Đường dẫn file dữ liệu</label><input name="path" required value="${escapeHtml(Cloud.getConfig()?.path || 'data/store-data.json')}"></div>
+        <div class="form-group"><label>Token GitHub</label><input name="token" type="password" required autocomplete="off"></div>
+        <button class="btn btn-primary" type="submit">Kết nối</button>
+      </form></div>`;
+    await new Promise(resolve => document.getElementById('connect-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const button = event.currentTarget.querySelector('button');
+      button.disabled = true;
+      const cfg = Object.fromEntries(new FormData(event.currentTarget));
+      for (const key of Object.keys(cfg)) cfg[key] = cfg[key].trim();
+      Cloud.saveConfig(cfg);
+      const result = await Cloud.pullLatest();
+      if (result.ok || result.notFound) resolve();
+      else { document.getElementById('connect-error').textContent = result.error; button.disabled = false; }
+    }));
+  },
+  async start() {
+    document.getElementById('bottomnav').hidden = true;
+    if (!Cloud.isConfigured()) await this.connection();
+    const result = await Cloud.init();
+    if (!result.ok && !result.notFound) await this.connection(result.error);
+    this.wrapDB();
+    try { this.session = JSON.parse(sessionStorage.getItem('qls_session')); } catch { this.session = null; }
+    if (!this.user) await this.loginForm();
+    document.getElementById('bottomnav').hidden = false;
+    if (!this.isAdmin()) state.tab = 'sales';
+    const observer = new MutationObserver(() => this.decorate());
+    for (const id of ['app', 'sheet-content']) observer.observe(document.getElementById(id), { childList: true, subtree: true });
+    setInterval(async () => {
+      if (document.hidden || this.running || Cloud._dirty || state.tab === 'settings' || document.querySelector('.sheet-overlay.open, .modal-overlay.open') || document.activeElement?.matches('input, textarea, select')) return;
+      const result = await Cloud.pullLatest();
+      if (result.ok) {
+        if (!this.user) { sessionStorage.removeItem('qls_session'); location.reload(); }
+        else render();
+      }
+    }, 60000);
+    window.addEventListener('beforeunload', event => {
+      if (this.running || Cloud._dirty) { event.preventDefault(); event.returnValue = ''; }
+    });
+  },
+  async loginForm() {
+    const setup = DB.getAccess().users.length === 0;
+    document.getElementById('topbar-title').textContent = setup ? 'Tạo admin lần đầu' : 'Đăng nhập cửa hàng';
+    document.getElementById('app').innerHTML = `<form id="shop-login" class="settings-item">
+      <h3>${setup ? 'Tạo tài khoản admin' : 'Đăng nhập'}</h3>
+      <p>${setup ? 'Chưa có tài khoản. Chủ cửa hàng tạo admin một lần tại đây.' : 'Dùng tài khoản do admin cấp.'}</p>
+      <div class="form-group"><label>Tên đăng nhập</label><input name="username" required minlength="3" maxlength="40" autocomplete="username" value="${setup ? 'admin' : ''}"></div>
+      <div class="form-group"><label>Mật khẩu${setup ? ' (ít nhất 8 ký tự)' : ''}</label><input name="password" type="password" required maxlength="128" autocomplete="${setup ? 'new-password' : 'current-password'}"></div>
+      ${setup ? '<div class="form-group"><label>Nhập lại mật khẩu</label><input name="confirm" type="password" required autocomplete="new-password"></div>' : ''}
+      <p id="login-error" role="alert"></p><button class="btn btn-primary" type="submit">${setup ? 'Tạo admin' : 'Đăng nhập'}</button>
+    </form>`;
+    await new Promise(resolve => document.getElementById('shop-login').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const button = form.querySelector('button');
+      button.disabled = true;
+      try {
+        const input = Object.fromEntries(new FormData(form));
+        let user;
+        if (setup) {
+          this.validate(input.username, input.password);
+          if (input.password !== input.confirm) throw new Error('Hai mật khẩu chưa giống nhau.');
+          if (DB.getAccess().users.length) throw new Error('Đã có admin. Vui lòng tải lại để đăng nhập.');
+          user = { id: uid(), username: input.username, role: 'admin', disabled: false, version: uid(), credentials: await this.credentials(input.password) };
+          this.settingUp = true;
+          const saved = await this.run(() => DB.saveAccess({ users: [user] }));
+          this.settingUp = false;
+          if (!saved) throw new Error('Chưa tạo được admin trên GitHub. Kiểm tra kết nối rồi thử lại.');
+        } else {
+          user = DB.getAccess().users.find(user => user.username === input.username && !user.disabled);
+          const computed = await this.credentials(input.password, user?.credentials.salt);
+          if (!user || computed.hash !== user.credentials.hash) throw new Error('Tên đăng nhập hoặc mật khẩu chưa đúng.');
+        }
+        this.signIn(user);
+        form.reset();
+        resolve();
+      } catch (error) { document.getElementById('login-error').textContent = error.message; }
+      finally { this.settingUp = false; button.disabled = false; }
+    }));
+  },
+  canTab(tab) { return this.isAdmin() || ['sales', 'purchases', 'customers', 'more', 'items', 'inventory', 'lookup'].includes(tab); },
+  canAction(action, element) {
+    if (this.isAdmin()) return true;
+    if (/^(delete-|edit-|merge-|do-|trigger-import|trigger-restore|download-import|save-shop|remove-shop|trigger-shop|cloud-)/.test(action)) return false;
+    if (['add-item', 'add-purchase-return', 'add-transaction', 'collect-debt', 'share-customers', 'submit-item-form', 'submit-purchase-return-form', 'submit-transaction-form', 'submit-collect-debt'].includes(action)) return false;
+    return action !== 'go-tab' || this.canTab(element.dataset.tab);
+  },
+  decorate() {
+    if (!this.user) return;
+    for (const el of document.querySelectorAll('[data-action]')) el.hidden = !this.canAction(el.dataset.action, el);
+    for (const el of document.querySelectorAll('.nav-btn')) el.hidden = !this.canTab(el.dataset.tab);
+    if (state.tab === 'more' && !document.getElementById('account-panel')) {
+      const panel = document.createElement('div');
+      panel.id = 'account-panel'; panel.className = 'settings-item';
+      panel.innerHTML = `<p>${escapeHtml(this.user.username)} · ${this.isAdmin() ? 'Admin' : 'Nhân viên'}</p>
+        ${this.isAdmin() ? '<button class="btn btn-secondary" id="manage-users">Quản lý tài khoản</button>' : ''}
+        <button class="btn btn-secondary" id="shop-logout">Đăng xuất</button>`;
+      document.getElementById('app').prepend(panel);
+      panel.querySelector('#manage-users')?.addEventListener('click', () => this.usersForm());
+      panel.querySelector('#shop-logout').addEventListener('click', () => {
+        if (this.running || Cloud._dirty) { toast('Vui lòng chờ đồng bộ xong.'); return; }
+        sessionStorage.removeItem('qls_session'); location.reload();
+      });
+    }
+  },
+  usersForm() {
+    if (!this.isAdmin()) return;
+    const users = DB.getAccess().users;
+    openSheet(`<div class="sheet-title">Quản lý tài khoản</div>
+      <p>Nhân viên được bán hàng, nhập hàng và thêm khách hàng.</p>
+      ${users.map(user => `<div class="settings-item"><b>${escapeHtml(user.username)}</b> · ${user.role === 'admin' ? 'Admin' : 'Nhân viên'} · ${user.disabled ? 'Đã khóa' : 'Hoạt động'}
+        <div class="btn-row"><button type="button" data-user-id="${user.id}" data-user-op="password">Đổi mật khẩu</button>
+        <button type="button" data-user-id="${user.id}" data-user-op="toggle">${user.disabled ? 'Mở khóa' : 'Khóa'}</button></div></div>`).join('')}
+      <form id="create-user"><h3>Thêm nhân viên</h3>
+        <div class="form-group"><label>Tên đăng nhập</label><input name="username" required minlength="3" maxlength="40" autocomplete="off"></div>
+        <div class="form-group"><label>Mật khẩu (ít nhất 8 ký tự)</label><input name="password" type="password" required minlength="8" maxlength="128" autocomplete="new-password"></div>
+        <button class="btn btn-primary" type="submit">Tạo nhân viên</button></form>
+      <button data-action="close-sheet">Đóng</button>`);
+    document.getElementById('create-user').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const input = Object.fromEntries(new FormData(form));
+      await this.run(async () => {
+        this.validate(input.username, input.password);
+        const access = DB.getAccess();
+        if (access.users.some(user => user.username.toLowerCase() === input.username.toLowerCase())) throw new Error('Tên đăng nhập đã có.');
+        access.users.push({ id: uid(), username: input.username, role: 'staff', disabled: false, version: uid(), credentials: await this.credentials(input.password) });
+        DB.saveAccess(access);
+        this.defer(() => this.usersForm());
+      });
+    });
+    document.querySelectorAll('[data-user-op]').forEach(button => button.addEventListener('click', async () => {
+      if (button.dataset.userOp === 'password') { this.passwordForm(button.dataset.userId); return; }
+      if (!confirmDialog('Thay đổi trạng thái tài khoản này?')) return;
+      await this.run(() => {
+        const access = DB.getAccess();
+        const target = access.users.find(user => user.id === button.dataset.userId);
+        target.disabled = !target.disabled;
+        if (!access.users.some(user => user.role === 'admin' && !user.disabled)) throw new Error('Phải giữ một admin hoạt động.');
+        target.version = uid();
+        DB.saveAccess(access);
+        this.defer(() => this.usersForm());
+      });
+    }));
+  },
+  passwordForm(id) {
+    if (!this.isAdmin()) return;
+    openSheet(`<div class="sheet-title">Đổi mật khẩu</div><form id="change-password">
+      <div class="form-group"><label>Mật khẩu mới (ít nhất 8 ký tự)</label><input name="password" type="password" required minlength="8" maxlength="128" autocomplete="new-password"></div>
+      <button class="btn btn-primary" type="submit">Lưu mật khẩu</button></form><button data-action="close-sheet">Đóng</button>`);
+    document.getElementById('change-password').addEventListener('submit', async event => {
+      event.preventDefault();
+      const password = new FormData(event.currentTarget).get('password');
+      await this.run(async () => {
+        const access = DB.getAccess();
+        const target = access.users.find(user => user.id === id);
+        this.validate(target.username, password);
+        target.credentials = await this.credentials(password);
+        target.version = uid();
+        DB.saveAccess(access);
+        this.defer(() => { if (!this.user) { sessionStorage.removeItem('qls_session'); location.reload(); } else this.usersForm(); });
+      });
+    });
+  },
+};
+window.Access = Access;
 
 </script>
 <script>
@@ -3678,6 +3989,9 @@ const state = {
   customerSearch: '',
   inventorySearch: '',
   lookupQuery: '',
+  lookupPeriod: 'all',
+  lookupCustomStart: todayStr(),
+  lookupCustomEnd: todayStr(),
   dashShowAllItems: false,
   purchasePeriod: 'all',
   purchaseCustomStart: todayStr(),
@@ -3715,9 +4029,10 @@ let formDraft = {}; // dữ liệu tạm khi đang mở form trong sheet
 // ---------------------------------------------------------------------
 // INIT & ROUTER
 // ---------------------------------------------------------------------
-function init() {
+async function init() {
+  await Access.start();
   const hashTab = location.hash.replace('#', '');
-  if (TITLES[hashTab]) state.tab = hashTab;
+  if (TITLES[hashTab] && Access.canTab(hashTab)) state.tab = hashTab;
 
   document.getElementById('bottomnav').addEventListener('click', (e) => {
     const btn = e.target.closest('.nav-btn');
@@ -3757,19 +4072,6 @@ function init() {
   render();
   registerServiceWorker();
   bindCloudStatusUI();
-
-  // Đồng bộ dữ liệu mới nhất từ GitHub (nếu đã cấu hình) rồi vẽ lại màn
-  // hình — không chặn màn hình đầu tiên, dữ liệu local hiện có vẫn hiện
-  // ngay lập tức, sau đó cập nhật lại khi tải xong dữ liệu chung mới nhất.
-  if (typeof Cloud !== 'undefined') {
-    Cloud.init().then((result) => {
-      if (result && result.ok && !result.skipped) {
-        render();
-      } else if (result && result.notFound) {
-        toast('Chưa có dữ liệu chung trên GitHub — vào Cài đặt để khởi tạo đồng bộ', true);
-      }
-    });
-  }
 }
 
 // Hiện trạng thái đồng bộ GitHub (nếu có) ở đầu trang, cập nhật theo thời
@@ -3802,12 +4104,16 @@ function bindCloudStatusUI() {
 }
 
 function setTab(tab) {
+  if (!Access.canTab(tab)) { toast('Bạn không có quyền truy cập mục này.', true); return; }
   state.tab = tab;
   location.hash = tab;
   render();
 }
 
 function render() {
+  if (!Access.user && !Access.settingUp) { location.reload(); return; }
+  if (Access.defer(() => render())) return;
+  if (!Access.canTab(state.tab)) state.tab = 'sales';
   document.getElementById('topbar-title').textContent = TITLES[state.tab] || '';
   document.querySelectorAll('.nav-btn').forEach((b) => {
     const t = b.dataset.tab;
@@ -3827,6 +4133,7 @@ function render() {
   else if (state.tab === 'lookup') renderLookup(app);
   else if (state.tab === 'cashflow') renderCashflow(app);
   else if (state.tab === 'settings') renderSettings(app);
+  Access.decorate();
 }
 
 function backToMoreLink() {
@@ -3838,6 +4145,7 @@ function onAppClick(e) {
   const t = e.target.closest('[data-action]');
   if (!t) return;
   const action = t.dataset.action;
+  if (!Access.canAction(action, t)) { toast('Bạn không có quyền thực hiện thao tác này.', true); return; }
   const id = t.dataset.id;
 
   const actions = {
@@ -3850,6 +4158,7 @@ function onAppClick(e) {
     'set-purchase-period': () => { state.purchasePeriod = t.dataset.period; render(); },
     'set-sale-period': () => { state.salePeriod = t.dataset.period; render(); },
     'set-purchase-return-period': () => { state.purchaseReturnPeriod = t.dataset.period; render(); },
+    'set-lookup-period': () => { state.lookupPeriod = t.dataset.period; render(); },
     'scan-for-item-search': () => {
       Scanner.open((code) => {
         state.itemSearch = code;
@@ -4030,17 +4339,20 @@ function onAppClick(e) {
       render();
     },
   };
-  if (actions[action]) actions[action]();
+  if (actions[action]) Access.dispatch(action, actions[action]);
 }
 
 // ---------------------------------------------------------------------
 // SHEET (form trượt lên từ dưới)
 // ---------------------------------------------------------------------
 function openSheet(html) {
+  if (Access.defer(() => openSheet(html))) return;
   document.getElementById('sheet-content').innerHTML = html;
   document.getElementById('sheet-overlay').classList.add('open');
+  Access.decorate();
 }
 function closeSheet() {
+  if (Access.defer(() => closeSheet())) return;
   document.getElementById('sheet-overlay').classList.remove('open');
   document.getElementById('sheet-content').innerHTML = '';
   formDraft = {};
@@ -4049,6 +4361,7 @@ function onSheetClick(e) {
   const t = e.target.closest('[data-action]');
   if (!t) return;
   const action = t.dataset.action;
+  if (!Access.canAction(action, t)) { toast('Bạn không có quyền thực hiện thao tác này.', true); return; }
   const map = {
     'close-sheet': closeSheet,
     'open-item-picker-for-form': () => openPicker((item) => selectFormItem(item)),
@@ -4264,7 +4577,7 @@ function onSheetClick(e) {
     'submit-transaction-form': submitTransactionForm,
     'set-tx-type': () => { formDraft.txType = t.dataset.type; refreshTxTypeUI(); },
   };
-  if (map[action]) map[action]();
+  if (map[action]) Access.dispatch(action, map[action]);
 }
 
 // ---------------------------------------------------------------------
@@ -5571,11 +5884,34 @@ function renderInventory(app) {
 // ---------------------------------------------------------------------
 // LOOKUP (Tra cứu theo IMEI / SĐT khách)
 // ---------------------------------------------------------------------
+function getLookupResults() {
+  const q = (state.lookupQuery || '').trim().toLowerCase();
+  const items = q ? DB.getItems().filter(item =>
+    [item.name, item.barcode, item.productCode, item.model].some(value => (value || '').toLowerCase().includes(q))) : [];
+  const customers = q ? DB.getCustomers().filter(customer =>
+    [customer.name, customer.phone].some(value => (value || '').toLowerCase().includes(q))) : [];
+  const itemIds = new Set(items.map(item => item.id));
+  const customerIds = new Set(customers.map(customer => customer.id));
+  const matchesItem = row => !q || itemIds.has(row.itemId) || (row.imei || '').toLowerCase().includes(q);
+  return {
+    items,
+    customers,
+    sales: filterRowsByPeriodState(DB.getSales(), 'lookup').filter(row =>
+      matchesItem(row) || customerIds.has(row.customerId) ||
+      [row.customerPhone, row.customerName].some(value => (value || '').toLowerCase().includes(q))),
+    purchases: filterRowsByPeriodState(DB.getPurchases(), 'lookup').filter(matchesItem),
+    returns: filterRowsByPeriodState(DB.getPurchaseReturns(), 'lookup').filter(matchesItem),
+  };
+}
+
 function renderLookup(app) {
   const raw = state.lookupQuery || '';
 
   app.innerHTML = `
     ${backToMoreLink()}
+    ${periodTabsHtml('lookup', 'set-lookup-period')}
+    ${state.lookupPeriod === 'custom' ? customRangeHtml('lookup') : ''}
+    <p class="help-text">Lọc theo ngày nhập, bán và trả NCC. Mặt hàng và khách hàng vẫn tìm trong toàn bộ danh mục.</p>
     <div class="input-with-btn" style="margin-bottom:12px">
       <input type="text" class="searchbox" style="margin-bottom:0" id="lookup-search" placeholder="🔍 Mã SP, mã vạch, IMEI/số seri, SĐT hoặc tên khách..." value="${escapeHtml(raw)}" />
       <button type="button" data-action="scan-for-lookup-search">📷</button>
@@ -5591,32 +5927,15 @@ function renderLookup(app) {
     const resultsEl = document.getElementById('lookup-results');
     if (!resultsEl) return;
 
-    if (!q) {
+    if (!q && state.lookupPeriod === 'all') {
       resultsEl.innerHTML = `<div class="empty-state">Nhập số IMEI/seri máy, số điện thoại hoặc tên khách hàng để tra cứu nhanh lịch sử nhập/bán liên quan.</div>`;
       return;
     }
 
-    const items = DB.getItems().filter(
-      (i) =>
-        i.name.toLowerCase().includes(q) ||
-        (i.barcode || '').toLowerCase().includes(q) ||
-        (i.productCode || '').toLowerCase().includes(q) ||
-        (i.model || '').toLowerCase().includes(q)
-    );
-    const sales = DB.getSales().filter(
-      (s) =>
-        (s.imei || '').toLowerCase().includes(q) ||
-        (s.customerPhone || '').toLowerCase().includes(q) ||
-        (s.customerName || '').toLowerCase().includes(q)
-    );
-    const purchases = DB.getPurchases().filter((p) => (p.imei || '').toLowerCase().includes(q));
-    const returns = DB.getPurchaseReturns().filter((r) => (r.imei || '').toLowerCase().includes(q));
-    const customers = DB.getCustomers().filter(
-      (c) => (c.phone || '').toLowerCase().includes(q) || (c.name || '').toLowerCase().includes(q)
-    );
+    const { items, customers, sales, purchases, returns } = getLookupResults();
 
     if (items.length === 0 && sales.length === 0 && purchases.length === 0 && returns.length === 0 && customers.length === 0) {
-      resultsEl.innerHTML = `<div class="empty-state">Không tìm thấy kết quả nào phù hợp với "${escapeHtml(state.lookupQuery || '')}".</div>`;
+      resultsEl.innerHTML = `<div class="empty-state">Không có kết quả${q ? ` cho "${escapeHtml(state.lookupQuery || '')}"` : ''} trong khoảng thời gian đã chọn.</div>`;
       return;
     }
 
@@ -5731,6 +6050,7 @@ function renderLookup(app) {
   }
 
   updateLookupResults();
+  wireCustomRangeInputs('lookup');
 
   document.getElementById('lookup-search').addEventListener('input', (e) => {
     state.lookupQuery = e.target.value;
@@ -5869,10 +6189,13 @@ function periodTabsHtml(prefix, actionName) {
   const cur = state[prefix + 'Period'];
   const btn = (p, label) =>
     `<button class="${cur === p ? 'active' : ''}" data-action="${actionName}" data-period="${p}">${label}</button>`;
-  return `<div class="period-tabs">
+  return `<div class="period-tabs${prefix === 'lookup' ? ' lookup-period-tabs' : ''}">
     ${btn('day', 'Hôm nay')}
+    ${prefix === 'lookup' ? btn('yesterday', 'Hôm qua') : ''}
     ${btn('week', 'Tuần này')}
+    ${prefix === 'lookup' ? btn('lastWeek', 'Tuần trước') : ''}
     ${btn('month', 'Tháng này')}
+    ${prefix === 'lookup' ? btn('lastMonth', 'Tháng trước') : ''}
     ${btn('all', 'Tất cả')}
     ${btn('custom', '📅 Tuỳ chỉnh')}
   </div>`;
@@ -6983,14 +7306,14 @@ function submitNewSaleOrderForm() {
   if (customerName) {
     if (customerId) {
       const existing = DB.getCustomer(customerId);
-      if (existing) {
+      if (existing && Access.isAdmin()) {
         DB.saveCustomer({ ...existing, name: customerName, phone: customerPhone, address: customerAddress });
       }
     } else {
       const matched = customerPhone ? DB.getCustomers().find((c) => c.phone && c.phone === customerPhone) : null;
       if (matched) {
         customerId = matched.id;
-        DB.saveCustomer({ ...matched, name: customerName, address: customerAddress || matched.address });
+        if (Access.isAdmin()) DB.saveCustomer({ ...matched, name: customerName, address: customerAddress || matched.address });
       } else {
         const created = DB.saveCustomer({ name: customerName, phone: customerPhone, address: customerAddress });
         customerId = created.id;
@@ -7248,14 +7571,14 @@ function submitSaleForm() {
   if (customerName) {
     if (customerId) {
       const existing = DB.getCustomer(customerId);
-      if (existing) {
+      if (existing && Access.isAdmin()) {
         DB.saveCustomer({ ...existing, name: customerName, phone: customerPhone, address: customerAddress });
       }
     } else {
       const matched = customerPhone ? DB.getCustomers().find((c) => c.phone && c.phone === customerPhone) : null;
       if (matched) {
         customerId = matched.id;
-        DB.saveCustomer({ ...matched, name: customerName, address: customerAddress || matched.address });
+        if (Access.isAdmin()) DB.saveCustomer({ ...matched, name: customerName, address: customerAddress || matched.address });
       } else {
         const created = DB.saveCustomer({ name: customerName, phone: customerPhone, address: customerAddress });
         customerId = created.id;
@@ -7347,6 +7670,7 @@ function resolveInvoiceQr(shop, sale, total) {
 }
 
 function printInvoice(sale) {
+  if (Access.defer(() => printInvoice(sale))) return;
   if (!sale) { toast('Không tìm thấy đơn bán để in', true); return; }
   // Đơn bán có nhiều sản phẩm (cùng orderId, tạo từ form "Bán hàng mới" nhiều
   // dòng) — in gộp thành 1 hoá đơn duy nhất liệt kê đủ mọi sản phẩm, thay vì
@@ -8153,8 +8477,8 @@ function renderSettings(app) {
       <button class="btn btn-primary" data-action="do-recompute-sale-costs">💰 Tính lại giá vốn toàn bộ đơn bán</button>
     </div>
     <div class="settings-item">
-      <h3>☁️ Đồng bộ nhiều người dùng (GitHub riêng tư)</h3>
-      <p>Cho phép nhiều nhân viên trên nhiều máy cùng dùng chung 1 bộ dữ liệu, lưu trên 1 repository <b>private</b> riêng trên GitHub (khác với repo chứa mã nguồn app đang public). <b>Bắt buộc phải có mạng</b> khi đã bật đồng bộ. Mỗi máy cần nhập cấu hình này 1 lần.</p>
+      <h3>☁️ Đồng bộ GitHub riêng tư</h3>
+      <p>Nhập cấu hình repo private và token trên từng thiết bị để dùng chung dữ liệu. Cần có mạng khi đồng bộ.</p>
       ${cloudSyncFormHtml()}
     </div>
     <div class="settings-item">
@@ -8253,7 +8577,7 @@ function renderSettings(app) {
     </div>
     <div class="settings-item">
       <h3>ℹ️ Cài app vào màn hình chính (Android)</h3>
-      <p>Mở app này bằng Chrome → bấm nút ⋮ (menu 3 chấm góc trên) → chọn "Thêm vào Màn hình chính" / "Install app". App sẽ chạy như app thật, có icon riêng. Dữ liệu lưu ngay trên điện thoại — nhớ backup định kỳ để tránh mất dữ liệu khi đổi máy hoặc xoá cache.</p>
+      <p>Mở app này bằng Chrome → bấm nút ⋮ (menu 3 chấm góc trên) → chọn "Thêm vào Màn hình chính" / "Install app". App sẽ chạy như app thật, có icon riêng. Dữ liệu lưu trên máy và đồng bộ trực tiếp với GitHub khi đã cấu hình.</p>
     </div>
     <div class="settings-item">
       <h3>📷 Về tính năng quét mã vạch</h3>
@@ -8261,7 +8585,7 @@ function renderSettings(app) {
     </div>
   `;
   document.getElementById('restore-file-input').addEventListener('change', handleRestoreFile);
-  document.getElementById('f-shop-qr-file').addEventListener('change', async (e) => {
+  document.getElementById('f-shop-qr-file').addEventListener('change', (e) => Access.run(async () => {
     const file = e.target.files[0];
     e.target.value = '';
     if (!file) return;
@@ -8280,7 +8604,7 @@ function renderSettings(app) {
     } catch (err) {
       toast('Không đọc được ảnh, thử lại nhé', true);
     }
-  });
+  }));
   updateShopQrAutoPreview();
   ['f-shop-bank-code', 'f-shop-bank-account', 'f-shop-bank-holder'].forEach((id) => {
     const el = document.getElementById(id);
@@ -8289,7 +8613,7 @@ function renderSettings(app) {
   IMPORT_TYPES.forEach((type) => {
     document.getElementById(`f-import-${type}`).addEventListener('change', (e) => {
       const file = e.target.files[0];
-      if (file) EXCEL_IMPORTERS[type](file);
+      if (file) Access.run(() => EXCEL_IMPORTERS[type](file));
       e.target.value = '';
     });
   });
@@ -8370,7 +8694,7 @@ function handleRestoreFile(e) {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = () => Access.run(() => {
     try {
       const payload = JSON.parse(reader.result);
       const summary = payload?.data
@@ -8389,7 +8713,7 @@ function handleRestoreFile(e) {
     } finally {
       e.target.value = '';
     }
-  };
+  });
   reader.readAsText(file);
 }
 
@@ -8993,7 +9317,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=33').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=42').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
