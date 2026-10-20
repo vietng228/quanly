@@ -1,7 +1,7 @@
 {
   "name": "Quản Lý Thu Chi & Bán Hàng",
   "short_name": "Thu Chi Shop",
-  "description": "App quản lý thu chi, nhập hàng, bán hàng offline cho cửa hàng nhỏ",
+  "description": "Quản lý thu chi, nhập hàng, bán hàng và phân quyền nhân viên, đồng bộ GitHub trực tiếp",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

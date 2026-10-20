@@ -1,0 +1,12 @@
+{
+  "name": "quanly-shop",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test --test-isolation=none tests/*.test.cjs",
+    "bundle": "node scripts/bundle.mjs"
+  }
+}
