@@ -139,3 +139,40 @@ test('Thu chi chọn kỳ trước và tùy chỉnh lọc đúng ngày chứng t
     filterRowsByPeriodState(DB.getTransactions(), 'cash').map(row => row.id)`, context);
   assert.deepEqual(plain(ids), ['t-yesterday', 't-last-week']);
 });
+
+
+test('Nhập hàng và trả NCC lưu tên nhà cung cấp, mở sửa và dữ liệu cũ vẫn dùng được', () => {
+  const context = lookup();
+  vm.runInContext(`
+    let html = '';
+    openSheet = value => { html = value; };
+    closeSheet = () => {};
+    render = () => {};
+    toast = () => {};
+    confirmDialog = () => true;
+    renderImeiLines = () => {};
+    renderReturnImeiSuggestions = () => {};
+    syncImeiLinesFromDom = () => {};
+    DB.savePurchase = row => { savedPurchase = row; };
+    DB.savePurchaseReturn = row => { savedReturn = row; };
+    document.getElementById('f-date').value = '2026-10-20';
+    document.getElementById('f-qty').value = '1';
+    document.getElementById('f-cost-price').value = '10';
+    document.getElementById('f-note').value = '';
+    for (const type of ['purchase', 'return']) {
+      const open = type === 'purchase' ? openPurchaseForm : openPurchaseReturnForm;
+      const submit = type === 'purchase' ? submitPurchaseForm : submitPurchaseReturnForm;
+      open(null);
+      if (!html.includes('id="f-supplier-name" value=""')) throw new Error('Form mới thiếu NCC');
+      formDraft.itemId = 'tv'; formDraft.imeiLines = [];
+      document.getElementById('f-supplier-name').value = '  Công ty A & B  ';
+      submit();
+      const row = type === 'purchase' ? savedPurchase : savedReturn;
+      if (row.supplierName !== 'Công ty A & B') throw new Error('Chưa lưu tên NCC');
+      open({ ...row, id: 'existing' });
+      if (!html.includes('Công ty A &amp; B')) throw new Error('Mở sửa sai tên NCC');
+      open({ id: 'legacy', itemId: 'tv', quantity: 1 });
+      if (!html.includes('id="f-supplier-name" value=""')) throw new Error('Lỗi phiếu cũ');
+    }
+  `, context);
+});

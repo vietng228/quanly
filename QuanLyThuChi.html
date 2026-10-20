@@ -5279,6 +5279,7 @@ function openPurchaseReturnDetailSheet(returnId) {
 
   openSheet(`
     <div class="sheet-title">↩️ Trả hàng nhập · ${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</div>
+    ${r.supplierName ? `<p class="help-text">Nhà cung cấp: ${escapeHtml(r.supplierName)}</p>` : ''}
     <p class="help-text" style="margin-top:-8px">${formatDateVN(r.date)}</p>
     <div class="stat-grid" style="margin-top:8px">
       <div class="stat-card"><div class="label">Số lượng × Giá hoàn</div><div class="value" style="font-size:16px">${r.quantity} × ${formatMoney(r.costPrice)}</div></div>
@@ -6371,6 +6372,7 @@ function renderPurchases(app) {
             <div class="li-main" ${item ? `data-action="view-item-detail" data-id="${item.id}"` : ''}>
               <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')} <span class="badge ${isReturn ? 'tra' : 'nhap'}">${isReturn ? '↩️ Trả NCC' : 'Nhập'}</span></div>
               <div class="li-sub">SL ${p.quantity} × ${formatMoney(p.costPrice)}${p.note ? ' · ' + escapeHtml(p.note) : ''}</div>
+              ${p.supplierName ? `<div class="li-sub">NCC: ${escapeHtml(p.supplierName)}</div>` : ''}
               ${p.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(p.imei)}</div>` : ''}
             </div>
             <div class="li-right">
@@ -6458,6 +6460,7 @@ function renderPurchaseReturns(app) {
             <div class="li-main" data-action="view-purchase-return-detail" data-id="${r.id}">
               <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')} <span class="badge tra">↩️ Trả NCC</span></div>
               <div class="li-sub">SL ${r.quantity} × ${formatMoney(r.costPrice)}${r.note ? ' · ' + escapeHtml(r.note) : ''}</div>
+              ${r.supplierName ? `<div class="li-sub">NCC: ${escapeHtml(r.supplierName)}</div>` : ''}
               ${r.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(r.imei)}</div>` : ''}
             </div>
             <div class="li-right">
@@ -6660,6 +6663,10 @@ function openPurchaseForm(p) {
       <label>Mặt hàng *</label>
       <div class="picked-item-box" id="picked-item-box" data-action="open-item-picker-for-form">${itemPickBoxHtml(item)}</div>
     </div>
+    <div class="form-group">
+      <label for="f-supplier-name">Tên nhà cung cấp</label>
+      <input type="text" id="f-supplier-name" value="${escapeHtml(p?.supplierName || '')}" placeholder="Nhập tên nhà cung cấp" />
+    </div>
     <div class="form-row">
       <div class="form-group">
         <label>Ngày nhập</label>
@@ -6832,6 +6839,7 @@ function submitPurchaseForm() {
     quantity: Number(document.getElementById('f-qty').value) || 1,
     costPrice: parseMoneyInput(document.getElementById('f-cost-price').value),
     imei,
+    supplierName: document.getElementById('f-supplier-name').value.trim(),
     note: document.getElementById('f-note').value.trim(),
   };
   // Xác nhận rõ ràng trước khi GHI ĐÈ 1 lần nhập hàng đã có — tránh lỡ bấm
@@ -6867,6 +6875,10 @@ function openPurchaseReturnForm(r) {
     <div class="form-group">
       <label>Mặt hàng *</label>
       <div class="picked-item-box" id="picked-item-box" data-action="open-item-picker-for-form">${itemPickBoxHtml(item)}</div>
+    </div>
+    <div class="form-group">
+      <label for="f-supplier-name">Tên nhà cung cấp</label>
+      <input type="text" id="f-supplier-name" value="${escapeHtml(r?.supplierName || '')}" placeholder="Nhập tên nhà cung cấp" />
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -6954,6 +6966,7 @@ function submitPurchaseReturnForm() {
     quantity,
     costPrice: parseMoneyInput(document.getElementById('f-cost-price').value),
     imei,
+    supplierName: document.getElementById('f-supplier-name').value.trim(),
     note: document.getElementById('f-note').value.trim(),
   };
   // Xác nhận rõ ràng trước khi GHI ĐÈ 1 lần trả hàng NCC đã có — tránh lỡ
@@ -9371,7 +9384,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=45').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=46').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
