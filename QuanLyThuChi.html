@@ -3459,7 +3459,7 @@ const Access = {
   dirty: false,
   effects: [],
   get user() {
-    if (!this.session || this.session.expires < Date.now()) return null;
+    if (!this.session || (this.session.expires !== null && this.session.expires < Date.now())) return null;
     return DB.getAccess().users.find(user => user.id === this.session.id && user.version === this.session.version && !user.disabled) || null;
   },
   isAdmin() { return this.settingUp || this.user?.role === 'admin'; },
@@ -3474,9 +3474,20 @@ const Access = {
     if (!/^[\w.-]{3,40}$/.test(username)) throw new Error('Tên đăng nhập gồm 3–40 chữ, số, dấu . _ -');
     if (password.length < 8 || password.length > 128) throw new Error('Mật khẩu cần 8–128 ký tự.');
   },
-  signIn(user) {
-    this.session = { id: user.id, version: user.version, expires: Date.now() + 8 * 3600000 };
-    sessionStorage.setItem('qls_session', JSON.stringify(this.session));
+  signIn(user, remember = true) {
+    this.clearSession();
+    this.session = { id: user.id, version: user.version, expires: remember ? null : Date.now() + 8 * 3600000 };
+    (remember ? localStorage : sessionStorage).setItem('qls_session', JSON.stringify(this.session));
+  },
+  clearSession() {
+    this.session = null;
+    sessionStorage.removeItem('qls_session');
+    localStorage.removeItem('qls_session');
+  },
+  restoreSession() {
+    try { this.session = JSON.parse(sessionStorage.getItem('qls_session') || localStorage.getItem('qls_session')); }
+    catch { this.session = null; }
+    if (!this.user) this.clearSession();
   },
   wrapDB() {
     const creates = { saveSale: 'getSales', savePurchase: 'getPurchases', saveCustomer: 'getCustomers' };
@@ -3574,7 +3585,7 @@ const Access = {
     const result = await Cloud.init();
     if (!result.ok && !result.notFound) await this.connection(result.error);
     this.wrapDB();
-    try { this.session = JSON.parse(sessionStorage.getItem('qls_session')); } catch { this.session = null; }
+    this.restoreSession();
     if (!this.user) await this.loginForm();
     document.getElementById('bottomnav').hidden = false;
     if (!this.isAdmin()) state.tab = 'sales';
@@ -3584,7 +3595,7 @@ const Access = {
       if (document.hidden || this.running || Cloud._dirty || state.tab === 'settings' || document.querySelector('.sheet-overlay.open, .modal-overlay.open') || document.activeElement?.matches('input, textarea, select')) return;
       const result = await Cloud.pullLatest();
       if (result.ok) {
-        if (!this.user) { sessionStorage.removeItem('qls_session'); location.reload(); }
+        if (!this.user) { this.clearSession(); location.reload(); }
         else render();
       }
     }, 60000);
@@ -3601,6 +3612,7 @@ const Access = {
       <div class="form-group"><label>Tên đăng nhập</label><input name="username" required minlength="3" maxlength="40" autocomplete="username" value="${setup ? 'admin' : ''}"></div>
       <div class="form-group"><label>Mật khẩu${setup ? ' (ít nhất 8 ký tự)' : ''}</label><input name="password" type="password" required maxlength="128" autocomplete="${setup ? 'new-password' : 'current-password'}"></div>
       ${setup ? '<div class="form-group"><label>Nhập lại mật khẩu</label><input name="confirm" type="password" required autocomplete="new-password"></div>' : ''}
+      <label><input name="remember" type="checkbox" checked> Ghi nhớ đăng nhập trên thiết bị này</label>
       <p id="login-error" role="alert"></p><button class="btn btn-primary" type="submit">${setup ? 'Tạo admin' : 'Đăng nhập'}</button>
     </form>`;
     await new Promise(resolve => document.getElementById('shop-login').addEventListener('submit', async event => {
@@ -3625,7 +3637,7 @@ const Access = {
           const computed = await this.credentials(input.password, user?.credentials.salt);
           if (!user || computed.hash !== user.credentials.hash) throw new Error('Tên đăng nhập hoặc mật khẩu chưa đúng.');
         }
-        this.signIn(user);
+        this.signIn(user, input.remember === 'on');
         form.reset();
         resolve();
       } catch (error) { document.getElementById('login-error').textContent = error.message; }
@@ -3653,7 +3665,7 @@ const Access = {
       panel.querySelector('#manage-users')?.addEventListener('click', () => this.usersForm());
       panel.querySelector('#shop-logout').addEventListener('click', () => {
         if (this.running || Cloud._dirty) { toast('Vui lòng chờ đồng bộ xong.'); return; }
-        sessionStorage.removeItem('qls_session'); location.reload();
+        this.clearSession(); location.reload();
       });
     }
   },
@@ -3712,7 +3724,7 @@ const Access = {
         target.credentials = await this.credentials(password);
         target.version = uid();
         DB.saveAccess(access);
-        this.defer(() => { if (!this.user) { sessionStorage.removeItem('qls_session'); location.reload(); } else this.usersForm(); });
+        this.defer(() => { if (!this.user) { this.clearSession(); location.reload(); } else this.usersForm(); });
       });
     });
   },
@@ -9304,7 +9316,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=43').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=44').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 

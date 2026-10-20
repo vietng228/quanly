@@ -5462,7 +5462,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=43').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=44').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
