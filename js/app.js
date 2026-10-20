@@ -147,6 +147,9 @@ const state = {
   customerSearch: '',
   inventorySearch: '',
   lookupQuery: '',
+  lookupPeriod: 'all',
+  lookupCustomStart: todayStr(),
+  lookupCustomEnd: todayStr(),
   dashShowAllItems: false,
   purchasePeriod: 'all',
   purchaseCustomStart: todayStr(),
@@ -184,9 +187,10 @@ let formDraft = {}; // dữ liệu tạm khi đang mở form trong sheet
 // ---------------------------------------------------------------------
 // INIT & ROUTER
 // ---------------------------------------------------------------------
-function init() {
+async function init() {
+  await Access.start();
   const hashTab = location.hash.replace('#', '');
-  if (TITLES[hashTab]) state.tab = hashTab;
+  if (TITLES[hashTab] && Access.canTab(hashTab)) state.tab = hashTab;
 
   document.getElementById('bottomnav').addEventListener('click', (e) => {
     const btn = e.target.closest('.nav-btn');
@@ -226,19 +230,6 @@ function init() {
   render();
   registerServiceWorker();
   bindCloudStatusUI();
-
-  // Đồng bộ dữ liệu mới nhất từ GitHub (nếu đã cấu hình) rồi vẽ lại màn
-  // hình — không chặn màn hình đầu tiên, dữ liệu local hiện có vẫn hiện
-  // ngay lập tức, sau đó cập nhật lại khi tải xong dữ liệu chung mới nhất.
-  if (typeof Cloud !== 'undefined') {
-    Cloud.init().then((result) => {
-      if (result && result.ok && !result.skipped) {
-        render();
-      } else if (result && result.notFound) {
-        toast('Chưa có dữ liệu chung trên GitHub — vào Cài đặt để khởi tạo đồng bộ', true);
-      }
-    });
-  }
 }
 
 // Hiện trạng thái đồng bộ GitHub (nếu có) ở đầu trang, cập nhật theo thời
@@ -271,12 +262,16 @@ function bindCloudStatusUI() {
 }
 
 function setTab(tab) {
+  if (!Access.canTab(tab)) { toast('Bạn không có quyền truy cập mục này.', true); return; }
   state.tab = tab;
   location.hash = tab;
   render();
 }
 
 function render() {
+  if (!Access.user && !Access.settingUp) { location.reload(); return; }
+  if (Access.defer(() => render())) return;
+  if (!Access.canTab(state.tab)) state.tab = 'sales';
   document.getElementById('topbar-title').textContent = TITLES[state.tab] || '';
   document.querySelectorAll('.nav-btn').forEach((b) => {
     const t = b.dataset.tab;
@@ -296,6 +291,7 @@ function render() {
   else if (state.tab === 'lookup') renderLookup(app);
   else if (state.tab === 'cashflow') renderCashflow(app);
   else if (state.tab === 'settings') renderSettings(app);
+  Access.decorate();
 }
 
 function backToMoreLink() {
@@ -307,6 +303,7 @@ function onAppClick(e) {
   const t = e.target.closest('[data-action]');
   if (!t) return;
   const action = t.dataset.action;
+  if (!Access.canAction(action, t)) { toast('Bạn không có quyền thực hiện thao tác này.', true); return; }
   const id = t.dataset.id;
 
   const actions = {
@@ -319,6 +316,7 @@ function onAppClick(e) {
     'set-purchase-period': () => { state.purchasePeriod = t.dataset.period; render(); },
     'set-sale-period': () => { state.salePeriod = t.dataset.period; render(); },
     'set-purchase-return-period': () => { state.purchaseReturnPeriod = t.dataset.period; render(); },
+    'set-lookup-period': () => { state.lookupPeriod = t.dataset.period; render(); },
     'scan-for-item-search': () => {
       Scanner.open((code) => {
         state.itemSearch = code;
@@ -499,17 +497,20 @@ function onAppClick(e) {
       render();
     },
   };
-  if (actions[action]) actions[action]();
+  if (actions[action]) Access.dispatch(action, actions[action]);
 }
 
 // ---------------------------------------------------------------------
 // SHEET (form trượt lên từ dưới)
 // ---------------------------------------------------------------------
 function openSheet(html) {
+  if (Access.defer(() => openSheet(html))) return;
   document.getElementById('sheet-content').innerHTML = html;
   document.getElementById('sheet-overlay').classList.add('open');
+  Access.decorate();
 }
 function closeSheet() {
+  if (Access.defer(() => closeSheet())) return;
   document.getElementById('sheet-overlay').classList.remove('open');
   document.getElementById('sheet-content').innerHTML = '';
   formDraft = {};
@@ -518,6 +519,7 @@ function onSheetClick(e) {
   const t = e.target.closest('[data-action]');
   if (!t) return;
   const action = t.dataset.action;
+  if (!Access.canAction(action, t)) { toast('Bạn không có quyền thực hiện thao tác này.', true); return; }
   const map = {
     'close-sheet': closeSheet,
     'open-item-picker-for-form': () => openPicker((item) => selectFormItem(item)),
@@ -733,7 +735,7 @@ function onSheetClick(e) {
     'submit-transaction-form': submitTransactionForm,
     'set-tx-type': () => { formDraft.txType = t.dataset.type; refreshTxTypeUI(); },
   };
-  if (map[action]) map[action]();
+  if (map[action]) Access.dispatch(action, map[action]);
 }
 
 // ---------------------------------------------------------------------
@@ -2040,11 +2042,34 @@ function renderInventory(app) {
 // ---------------------------------------------------------------------
 // LOOKUP (Tra cứu theo IMEI / SĐT khách)
 // ---------------------------------------------------------------------
+function getLookupResults() {
+  const q = (state.lookupQuery || '').trim().toLowerCase();
+  const items = q ? DB.getItems().filter(item =>
+    [item.name, item.barcode, item.productCode, item.model].some(value => (value || '').toLowerCase().includes(q))) : [];
+  const customers = q ? DB.getCustomers().filter(customer =>
+    [customer.name, customer.phone].some(value => (value || '').toLowerCase().includes(q))) : [];
+  const itemIds = new Set(items.map(item => item.id));
+  const customerIds = new Set(customers.map(customer => customer.id));
+  const matchesItem = row => !q || itemIds.has(row.itemId) || (row.imei || '').toLowerCase().includes(q);
+  return {
+    items,
+    customers,
+    sales: filterRowsByPeriodState(DB.getSales(), 'lookup').filter(row =>
+      matchesItem(row) || customerIds.has(row.customerId) ||
+      [row.customerPhone, row.customerName].some(value => (value || '').toLowerCase().includes(q))),
+    purchases: filterRowsByPeriodState(DB.getPurchases(), 'lookup').filter(matchesItem),
+    returns: filterRowsByPeriodState(DB.getPurchaseReturns(), 'lookup').filter(matchesItem),
+  };
+}
+
 function renderLookup(app) {
   const raw = state.lookupQuery || '';
 
   app.innerHTML = `
     ${backToMoreLink()}
+    ${periodTabsHtml('lookup', 'set-lookup-period')}
+    ${state.lookupPeriod === 'custom' ? customRangeHtml('lookup') : ''}
+    <p class="help-text">Lọc theo ngày nhập, bán và trả NCC. Mặt hàng và khách hàng vẫn tìm trong toàn bộ danh mục.</p>
     <div class="input-with-btn" style="margin-bottom:12px">
       <input type="text" class="searchbox" style="margin-bottom:0" id="lookup-search" placeholder="🔍 Mã SP, mã vạch, IMEI/số seri, SĐT hoặc tên khách..." value="${escapeHtml(raw)}" />
       <button type="button" data-action="scan-for-lookup-search">📷</button>
@@ -2060,32 +2085,15 @@ function renderLookup(app) {
     const resultsEl = document.getElementById('lookup-results');
     if (!resultsEl) return;
 
-    if (!q) {
+    if (!q && state.lookupPeriod === 'all') {
       resultsEl.innerHTML = `<div class="empty-state">Nhập số IMEI/seri máy, số điện thoại hoặc tên khách hàng để tra cứu nhanh lịch sử nhập/bán liên quan.</div>`;
       return;
     }
 
-    const items = DB.getItems().filter(
-      (i) =>
-        i.name.toLowerCase().includes(q) ||
-        (i.barcode || '').toLowerCase().includes(q) ||
-        (i.productCode || '').toLowerCase().includes(q) ||
-        (i.model || '').toLowerCase().includes(q)
-    );
-    const sales = DB.getSales().filter(
-      (s) =>
-        (s.imei || '').toLowerCase().includes(q) ||
-        (s.customerPhone || '').toLowerCase().includes(q) ||
-        (s.customerName || '').toLowerCase().includes(q)
-    );
-    const purchases = DB.getPurchases().filter((p) => (p.imei || '').toLowerCase().includes(q));
-    const returns = DB.getPurchaseReturns().filter((r) => (r.imei || '').toLowerCase().includes(q));
-    const customers = DB.getCustomers().filter(
-      (c) => (c.phone || '').toLowerCase().includes(q) || (c.name || '').toLowerCase().includes(q)
-    );
+    const { items, customers, sales, purchases, returns } = getLookupResults();
 
     if (items.length === 0 && sales.length === 0 && purchases.length === 0 && returns.length === 0 && customers.length === 0) {
-      resultsEl.innerHTML = `<div class="empty-state">Không tìm thấy kết quả nào phù hợp với "${escapeHtml(state.lookupQuery || '')}".</div>`;
+      resultsEl.innerHTML = `<div class="empty-state">Không có kết quả${q ? ` cho "${escapeHtml(state.lookupQuery || '')}"` : ''} trong khoảng thời gian đã chọn.</div>`;
       return;
     }
 
@@ -2200,6 +2208,7 @@ function renderLookup(app) {
   }
 
   updateLookupResults();
+  wireCustomRangeInputs('lookup');
 
   document.getElementById('lookup-search').addEventListener('input', (e) => {
     state.lookupQuery = e.target.value;
@@ -2338,10 +2347,13 @@ function periodTabsHtml(prefix, actionName) {
   const cur = state[prefix + 'Period'];
   const btn = (p, label) =>
     `<button class="${cur === p ? 'active' : ''}" data-action="${actionName}" data-period="${p}">${label}</button>`;
-  return `<div class="period-tabs">
+  return `<div class="period-tabs${prefix === 'lookup' ? ' lookup-period-tabs' : ''}">
     ${btn('day', 'Hôm nay')}
+    ${prefix === 'lookup' ? btn('yesterday', 'Hôm qua') : ''}
     ${btn('week', 'Tuần này')}
+    ${prefix === 'lookup' ? btn('lastWeek', 'Tuần trước') : ''}
     ${btn('month', 'Tháng này')}
+    ${prefix === 'lookup' ? btn('lastMonth', 'Tháng trước') : ''}
     ${btn('all', 'Tất cả')}
     ${btn('custom', '📅 Tuỳ chỉnh')}
   </div>`;
@@ -3452,14 +3464,14 @@ function submitNewSaleOrderForm() {
   if (customerName) {
     if (customerId) {
       const existing = DB.getCustomer(customerId);
-      if (existing) {
+      if (existing && Access.isAdmin()) {
         DB.saveCustomer({ ...existing, name: customerName, phone: customerPhone, address: customerAddress });
       }
     } else {
       const matched = customerPhone ? DB.getCustomers().find((c) => c.phone && c.phone === customerPhone) : null;
       if (matched) {
         customerId = matched.id;
-        DB.saveCustomer({ ...matched, name: customerName, address: customerAddress || matched.address });
+        if (Access.isAdmin()) DB.saveCustomer({ ...matched, name: customerName, address: customerAddress || matched.address });
       } else {
         const created = DB.saveCustomer({ name: customerName, phone: customerPhone, address: customerAddress });
         customerId = created.id;
@@ -3717,14 +3729,14 @@ function submitSaleForm() {
   if (customerName) {
     if (customerId) {
       const existing = DB.getCustomer(customerId);
-      if (existing) {
+      if (existing && Access.isAdmin()) {
         DB.saveCustomer({ ...existing, name: customerName, phone: customerPhone, address: customerAddress });
       }
     } else {
       const matched = customerPhone ? DB.getCustomers().find((c) => c.phone && c.phone === customerPhone) : null;
       if (matched) {
         customerId = matched.id;
-        DB.saveCustomer({ ...matched, name: customerName, address: customerAddress || matched.address });
+        if (Access.isAdmin()) DB.saveCustomer({ ...matched, name: customerName, address: customerAddress || matched.address });
       } else {
         const created = DB.saveCustomer({ name: customerName, phone: customerPhone, address: customerAddress });
         customerId = created.id;
@@ -3816,6 +3828,7 @@ function resolveInvoiceQr(shop, sale, total) {
 }
 
 function printInvoice(sale) {
+  if (Access.defer(() => printInvoice(sale))) return;
   if (!sale) { toast('Không tìm thấy đơn bán để in', true); return; }
   // Đơn bán có nhiều sản phẩm (cùng orderId, tạo từ form "Bán hàng mới" nhiều
   // dòng) — in gộp thành 1 hoá đơn duy nhất liệt kê đủ mọi sản phẩm, thay vì
@@ -4622,8 +4635,8 @@ function renderSettings(app) {
       <button class="btn btn-primary" data-action="do-recompute-sale-costs">💰 Tính lại giá vốn toàn bộ đơn bán</button>
     </div>
     <div class="settings-item">
-      <h3>☁️ Đồng bộ nhiều người dùng (GitHub riêng tư)</h3>
-      <p>Cho phép nhiều nhân viên trên nhiều máy cùng dùng chung 1 bộ dữ liệu, lưu trên 1 repository <b>private</b> riêng trên GitHub (khác với repo chứa mã nguồn app đang public). <b>Bắt buộc phải có mạng</b> khi đã bật đồng bộ. Mỗi máy cần nhập cấu hình này 1 lần.</p>
+      <h3>☁️ Đồng bộ GitHub riêng tư</h3>
+      <p>Nhập cấu hình repo private và token trên từng thiết bị để dùng chung dữ liệu. Cần có mạng khi đồng bộ.</p>
       ${cloudSyncFormHtml()}
     </div>
     <div class="settings-item">
@@ -4722,7 +4735,7 @@ function renderSettings(app) {
     </div>
     <div class="settings-item">
       <h3>ℹ️ Cài app vào màn hình chính (Android)</h3>
-      <p>Mở app này bằng Chrome → bấm nút ⋮ (menu 3 chấm góc trên) → chọn "Thêm vào Màn hình chính" / "Install app". App sẽ chạy như app thật, có icon riêng. Dữ liệu lưu ngay trên điện thoại — nhớ backup định kỳ để tránh mất dữ liệu khi đổi máy hoặc xoá cache.</p>
+      <p>Mở app này bằng Chrome → bấm nút ⋮ (menu 3 chấm góc trên) → chọn "Thêm vào Màn hình chính" / "Install app". App sẽ chạy như app thật, có icon riêng. Dữ liệu lưu trên máy và đồng bộ trực tiếp với GitHub khi đã cấu hình.</p>
     </div>
     <div class="settings-item">
       <h3>📷 Về tính năng quét mã vạch</h3>
@@ -4730,7 +4743,7 @@ function renderSettings(app) {
     </div>
   `;
   document.getElementById('restore-file-input').addEventListener('change', handleRestoreFile);
-  document.getElementById('f-shop-qr-file').addEventListener('change', async (e) => {
+  document.getElementById('f-shop-qr-file').addEventListener('change', (e) => Access.run(async () => {
     const file = e.target.files[0];
     e.target.value = '';
     if (!file) return;
@@ -4749,7 +4762,7 @@ function renderSettings(app) {
     } catch (err) {
       toast('Không đọc được ảnh, thử lại nhé', true);
     }
-  });
+  }));
   updateShopQrAutoPreview();
   ['f-shop-bank-code', 'f-shop-bank-account', 'f-shop-bank-holder'].forEach((id) => {
     const el = document.getElementById(id);
@@ -4758,7 +4771,7 @@ function renderSettings(app) {
   IMPORT_TYPES.forEach((type) => {
     document.getElementById(`f-import-${type}`).addEventListener('change', (e) => {
       const file = e.target.files[0];
-      if (file) EXCEL_IMPORTERS[type](file);
+      if (file) Access.run(() => EXCEL_IMPORTERS[type](file));
       e.target.value = '';
     });
   });
@@ -4839,7 +4852,7 @@ function handleRestoreFile(e) {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = () => Access.run(() => {
     try {
       const payload = JSON.parse(reader.result);
       const summary = payload?.data
@@ -4858,7 +4871,7 @@ function handleRestoreFile(e) {
     } finally {
       e.target.value = '';
     }
-  };
+  });
   reader.readAsText(file);
 }
 
@@ -5462,7 +5475,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=33').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=42').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 

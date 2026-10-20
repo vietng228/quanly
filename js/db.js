@@ -9,6 +9,7 @@ const DB_KEYS = {
   transactions: DB_PREFIX + 'transactions',
   customers: DB_PREFIX + 'customers',
   meta: DB_PREFIX + 'meta',
+  access: DB_PREFIX + 'access',
 };
 
 function uid() {
@@ -91,7 +92,7 @@ const DB = {
     writeList(DB_KEYS.purchases, list);
     // cập nhật giá nhập gần nhất & mặc định cho item
     const item = DB.getItem(p.itemId);
-    if (item) {
+    if (item && (!window.Access || Access.isAdmin())) {
       item.lastCostPrice = p.costPrice;
       DB.saveItem(item);
     }
@@ -198,6 +199,8 @@ const DB = {
       app: 'quan-ly-thu-chi-ban-hang',
       version: 1,
       exportedAt: new Date().toISOString(),
+      shopInfo: DB.getShopInfo(),
+      access: DB.getAccess(),
       data: {
         items: readList(DB_KEYS.items),
         purchases: readList(DB_KEYS.purchases),
@@ -212,6 +215,8 @@ const DB = {
     if (!payload || !payload.data) throw new Error('File backup không hợp lệ');
     const { items = [], purchases = [], purchaseReturns = [], sales = [], transactions = [], customers = [] } = payload.data;
     if (mode === 'replace') {
+      if (payload.shopInfo) DB.saveShopInfo(payload.shopInfo);
+      if (payload.access) DB.saveAccess(payload.access);
       writeList(DB_KEYS.items, items);
       writeList(DB_KEYS.purchases, purchases);
       writeList(DB_KEYS.purchaseReturns, purchaseReturns);
@@ -243,6 +248,14 @@ const DB = {
     writeList(DB_KEYS.sales, []);
     writeList(DB_KEYS.transactions, []);
     writeList(DB_KEYS.customers, []);
+  },
+
+  getAccess() {
+    try { return JSON.parse(localStorage.getItem(DB_KEYS.access)) || { users: [] }; }
+    catch { return { users: [] }; }
+  },
+  saveAccess(access) {
+    localStorage.setItem(DB_KEYS.access, JSON.stringify(access));
   },
 
   // ---------- THÔNG TIN CỬA HÀNG (hiện trên hoá đơn in) ----------
