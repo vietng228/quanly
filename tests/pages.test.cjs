@@ -205,3 +205,76 @@ test('Phiên tạm hết hạn và tài khoản đã đổi phiên hoặc bị k
     if (Access.user || localStorage.getItem('qls_session')) throw new Error('Tài khoản khóa còn hiệu lực');
   `, context);
 });
+
+
+test('Admin cấp quyền riêng, nhân viên dùng đúng quyền và không tự phân quyền', () => {
+  const context = shop();
+  vm.runInContext(`
+    Access.savePermissions('staff', ['sale.delete', 'item.create', 'purchase-return.create', 'reports.view', 'admin']);
+    Access.signIn(DB.getAccess().users.find(user => user.id === 'staff'));
+    if (!Access.canAction('delete-sale') || !Access.canAction('add-item') || !Access.canTab('dashboard') || !Access.canTab('purchaseReturns')) throw new Error('Chưa cấp quyền');
+    DB.deleteSale('s1');
+    DB.saveItem({ name: 'Mới' });
+    DB.savePurchaseReturn({ itemId: 'tv', quantity: 1 });
+    if (Access.canAction('add-sale') || Access.canAction('edit-purchase') || Access.canTab('settings') || Access.can('admin')) throw new Error('Thừa quyền');
+  `, context);
+  assert.throws(() => vm.runInContext("DB.saveSale({ itemId: 'tv' })", context), /không có quyền/);
+  assert.throws(() => vm.runInContext("Access.savePermissions('staff', ['sale.create'])", context), /Chỉ admin/);
+  assert.throws(() => vm.runInContext('DB.saveAccess({users: []})', context), /không có quyền/);
+});
+
+test('Phân biệt quyền thêm, sửa, xóa của từng loại dữ liệu; thu hồi áp dụng ngay', () => {
+  for (const [entity, suffix, getter] of [
+    ['sale', 'Sale', 'getSales'], ['purchase', 'Purchase', 'getPurchases'], ['item', 'Item', 'getItems'],
+    ['customer', 'Customer', 'getCustomers'], ['purchase-return', 'PurchaseReturn', 'getPurchaseReturns'],
+    ['transaction', 'Transaction', 'getTransactions'],
+  ]) {
+    const context = shop();
+    context.entity = entity; context.suffix = suffix; context.getter = getter;
+    vm.runInContext(`
+      const admin = DB.getAccess().users.find(user => user.id === 'admin');
+      const staff = () => DB.getAccess().users.find(user => user.id === 'staff');
+      const row = DB[getter]()[0] || DB['save' + suffix]({ itemId: 'tv', quantity: 1 });
+      Access.savePermissions('staff', [entity + '.edit']);
+      Access.signIn(staff());
+      DB['save' + suffix]({ ...row, note: 'Đã sửa' });
+      if (!Access.canAction('edit-' + entity) || Access.canAction('delete-' + entity) || Access.canAction('add-' + entity)) throw new Error('Giao diện sai quyền');
+    `, context);
+    assert.throws(() => vm.runInContext("DB['save' + suffix]({ itemId: 'tv', quantity: 1 })", context), /không có quyền/);
+    assert.throws(() => vm.runInContext("DB['delete' + suffix](row.id)", context), /không có quyền/);
+    vm.runInContext(`
+      Access.signIn(admin);
+      Access.savePermissions('staff', []);
+      Access.signIn(staff());
+      if (Access.can(entity + '.create') || Access.can(entity + '.edit') || Access.can(entity + '.delete')) throw new Error('Chưa thu hồi');
+    `, context);
+    assert.throws(() => vm.runInContext("DB['save' + suffix]({ ...row })", context), /không có quyền/);
+  }
+});
+
+test('Lưu quyền chỉ thành công sau đồng bộ; lỗi GitHub giữ nguyên quyền cũ', async () => {
+  const context = shop();
+  assert.equal(await vm.runInContext("Access.run(() => Access.savePermissions('staff', ['sale.delete']))", context), true);
+  assert.equal(vm.runInContext("DB.getAccess().users.find(user => user.id === 'staff').permissions.join()", context), 'sale.delete');
+  vm.runInContext("Cloud.push = async () => ({ok: false, error: 'Mất kết nối'})", context);
+  assert.equal(await vm.runInContext("Access.run(() => Access.savePermissions('staff', []))", context), false);
+  assert.equal(vm.runInContext("DB.getAccess().users.find(user => user.id === 'staff').permissions.join()", context), 'sale.delete');
+});
+
+
+test('Form phân quyền hiển thị quyền hiện tại và lưu đúng các ô đã chọn', async () => {
+  const context = shop();
+  vm.runInContext(`
+    let sheetHtml = '';
+    let submitPermissions;
+    openSheet = html => { sheetHtml = html; };
+    escapeHtml = value => value;
+    document.getElementById = id => ({ addEventListener(type, callback) { if (id === 'staff-permissions') submitPermissions = callback; } });
+    FormData = class { getAll() { return ['customer.edit', 'reports.view']; } };
+    Access.permissionsForm('staff');
+    if (!sheetHtml.includes('value="sale.create" checked') || sheetHtml.includes('value="sale.delete" checked') || !sheetHtml.includes('Lưu quyền')) throw new Error('Form sai quyền mặc định');
+    Access.usersForm = () => {};
+  `, context);
+  await vm.runInContext('submitPermissions({preventDefault() {}, currentTarget: {}})', context);
+  assert.equal(vm.runInContext("DB.getAccess().users.find(user => user.id === 'staff').permissions.join()", context), 'customer.edit,reports.view');
+});
