@@ -10,6 +10,10 @@ const Access = {
     return DB.getAccess().users.find(user => user.id === this.session.id && user.version === this.session.version && !user.disabled) || null;
   },
   isAdmin() { return this.settingUp || this.user?.role === 'admin'; },
+  permissionGroups: { sale: 'Bán hàng', purchase: 'Nhập hàng', item: 'Mặt hàng', customer: 'Khách hàng', 'purchase-return': 'Trả NCC', transaction: 'Thu chi' },
+  defaultPermissions: ['sale.create', 'purchase.create', 'customer.create'],
+  permissionsFor(user) { return Array.isArray(user.permissions) ? user.permissions : this.defaultPermissions; },
+  can(permission) { return this.isAdmin() || !!this.user && this.permissionsFor(this.user).includes(permission); },
   async credentials(password, salt) {
     const bytes = salt ? Uint8Array.from(salt.match(/../g), part => parseInt(part, 16)) : crypto.getRandomValues(new Uint8Array(16));
     const hex = value => Array.from(new Uint8Array(value), byte => byte.toString(16).padStart(2, '0')).join('');
@@ -37,15 +41,20 @@ const Access = {
     if (!this.user) this.clearSession();
   },
   wrapDB() {
-    const creates = { saveSale: 'getSales', savePurchase: 'getPurchases', saveCustomer: 'getCustomers' };
+    const entities = {
+      Item: ['item', 'getItems'], Purchase: ['purchase', 'getPurchases'], PurchaseReturn: ['purchase-return', 'getPurchaseReturns'],
+      Sale: ['sale', 'getSales'], Customer: ['customer', 'getCustomers'], Transaction: ['transaction', 'getTransactions'],
+    };
     for (const name of ['saveItem', 'deleteItem', 'savePurchase', 'deletePurchase', 'savePurchaseReturn', 'deletePurchaseReturn',
       'saveSale', 'deleteSale', 'saveCustomer', 'deleteCustomer', 'saveTransaction', 'deleteTransaction', 'saveShopInfo', 'saveAccess', 'importAll', 'clearAll']) {
       const original = DB[name];
       DB[name] = (...args) => {
         if (!Cloud._applying) {
           if (!this.isAdmin()) {
-            const getter = creates[name];
-            if (!this.user || !getter || DB[getter]().some(row => row.id === args[0]?.id)) throw new Error('Bạn không có quyền sửa/xóa dữ liệu này.');
+            const match = /^(save|delete)(.+)$/.exec(name);
+            const entity = match && entities[match[2]];
+            const operation = match?.[1] === 'delete' ? 'delete' : entity && DB[entity[1]]().some(row => row.id === args[0]?.id) ? 'edit' : 'create';
+            if (!entity || !this.can(entity[0] + '.' + operation)) throw new Error('Bạn không có quyền sửa/xóa dữ liệu này.');
           }
           this.dirty = true;
         }
@@ -191,11 +200,23 @@ const Access = {
       finally { this.settingUp = false; button.disabled = false; }
     }));
   },
-  canTab(tab) { return this.isAdmin() || ['sales', 'purchases', 'customers', 'more', 'items', 'inventory', 'lookup'].includes(tab); },
+  canTab(tab) {
+    if (this.isAdmin()) return true;
+    if (tab === 'dashboard') return this.can('reports.view');
+    const group = { purchaseReturns: 'purchase-return', cashflow: 'transaction' }[tab];
+    if (group) return ['create', 'edit', 'delete'].some(op => this.can(group + '.' + op));
+    return !!this.user && ['sales', 'purchases', 'customers', 'more', 'items', 'inventory', 'lookup'].includes(tab);
+  },
   canAction(action, element) {
     if (this.isAdmin()) return true;
+    const entityAction = /^(add|edit|delete)-(item|purchase-return|purchase|sale|customer|transaction)$/.exec(action);
+    if (entityAction) return this.can(entityAction[2] + '.' + ({ add: 'create', edit: 'edit', delete: 'delete' }[entityAction[1]]));
+    const submit = /^submit-(item|purchase-return|purchase|sale|customer|transaction)-form$/.exec(action);
+    if (submit) return this.can(submit[1] + '.create') || this.can(submit[1] + '.edit');
+    if (action === 'submit-new-sale-order') return this.can('sale.create');
+    if (['collect-debt', 'submit-collect-debt'].includes(action)) return this.can('sale.edit');
     if (/^(delete-|edit-|merge-|do-|trigger-import|trigger-restore|download-import|save-shop|remove-shop|trigger-shop|cloud-)/.test(action)) return false;
-    if (['add-item', 'add-purchase-return', 'add-transaction', 'collect-debt', 'share-customers', 'submit-item-form', 'submit-purchase-return-form', 'submit-transaction-form', 'submit-collect-debt'].includes(action)) return false;
+    if (action === 'share-customers') return false;
     return action !== 'go-tab' || this.canTab(element.dataset.tab);
   },
   decorate() {
@@ -220,9 +241,9 @@ const Access = {
     if (!this.isAdmin()) return;
     const users = DB.getAccess().users;
     openSheet(`<div class="sheet-title">Quản lý tài khoản</div>
-      <p>Nhân viên được bán hàng, nhập hàng và thêm khách hàng.</p>
+      <p>Chọn Phân quyền để cấp quyền riêng cho từng nhân viên. Cài đặt hệ thống và quản lý tài khoản chỉ dành cho admin.</p>
       ${users.map(user => `<div class="settings-item"><b>${escapeHtml(user.username)}</b> · ${user.role === 'admin' ? 'Admin' : 'Nhân viên'} · ${user.disabled ? 'Đã khóa' : 'Hoạt động'}
-        <div class="btn-row"><button type="button" data-user-id="${user.id}" data-user-op="password">Đổi mật khẩu</button>
+        <div class="btn-row">${user.role === 'staff' ? `<button type="button" data-user-id="${user.id}" data-user-op="permissions">Phân quyền</button>` : ''}<button type="button" data-user-id="${user.id}" data-user-op="password">Đổi mật khẩu</button>
         <button type="button" data-user-id="${user.id}" data-user-op="toggle">${user.disabled ? 'Mở khóa' : 'Khóa'}</button></div></div>`).join('')}
       <form id="create-user"><h3>Thêm nhân viên</h3>
         <div class="form-group"><label>Tên đăng nhập</label><input name="username" required minlength="3" maxlength="40" autocomplete="off"></div>
@@ -237,12 +258,13 @@ const Access = {
         this.validate(input.username, input.password);
         const access = DB.getAccess();
         if (access.users.some(user => user.username.toLowerCase() === input.username.toLowerCase())) throw new Error('Tên đăng nhập đã có.');
-        access.users.push({ id: uid(), username: input.username, role: 'staff', disabled: false, version: uid(), credentials: await this.credentials(input.password) });
+        access.users.push({ id: uid(), username: input.username, role: 'staff', permissions: [...this.defaultPermissions], disabled: false, version: uid(), credentials: await this.credentials(input.password) });
         DB.saveAccess(access);
         this.defer(() => this.usersForm());
       });
     });
     document.querySelectorAll('[data-user-op]').forEach(button => button.addEventListener('click', async () => {
+      if (button.dataset.userOp === 'permissions') { this.permissionsForm(button.dataset.userId); return; }
       if (button.dataset.userOp === 'password') { this.passwordForm(button.dataset.userId); return; }
       if (!confirmDialog('Thay đổi trạng thái tài khoản này?')) return;
       await this.run(() => {
@@ -255,6 +277,39 @@ const Access = {
         this.defer(() => this.usersForm());
       });
     }));
+  },
+  savePermissions(id, permissions) {
+    if (!this.isAdmin()) throw new Error('Chỉ admin được phân quyền.');
+    const access = DB.getAccess();
+    const target = access.users.find(user => user.id === id && user.role === 'staff');
+    if (!target) throw new Error('Không tìm thấy nhân viên.');
+    const allowed = Object.keys(this.permissionGroups).flatMap(group => ['create', 'edit', 'delete'].map(op => group + '.' + op)).concat('reports.view');
+    target.permissions = allowed.filter(permission => permissions.includes(permission));
+    DB.saveAccess(access);
+  },
+  permissionsForm(id) {
+    if (!this.isAdmin()) return;
+    const target = DB.getAccess().users.find(user => user.id === id && user.role === 'staff');
+    if (!target) return;
+    const selected = this.permissionsFor(target);
+    const checkbox = (permission, label) => `<label style="display:block;margin:10px 0"><input type="checkbox" name="permission" value="${permission}" ${selected.includes(permission) ? 'checked' : ''}> ${label}</label>`;
+    openSheet(`<div class="sheet-title">Phân quyền: ${escapeHtml(target.username)}</div>
+      <form id="staff-permissions"><p>Bỏ chọn để thu hồi quyền. Nhân viên vẫn được xem danh mục và lịch sử như hiện tại.</p>
+      ${Object.entries(this.permissionGroups).map(([group, label]) => `<fieldset class="settings-item"><legend>${label}</legend>
+        ${['create', 'edit', 'delete'].map((op, i) => checkbox(group + '.' + op, ['Thêm mới', 'Sửa', 'Xóa'][i])).join('')}</fieldset>`).join('')}
+      ${checkbox('reports.view', 'Xem báo cáo Tổng quan')}
+      <p>Quyền sửa hóa đơn bán hàng bao gồm thu nợ. Quyền mới áp dụng trên máy nhân viên khi đồng bộ dữ liệu.</p>
+      <button class="btn btn-primary" type="submit">Lưu quyền</button></form>
+      <button type="button" id="back-to-users">Quay lại</button>`);
+    document.getElementById('back-to-users').addEventListener('click', () => this.usersForm());
+    document.getElementById('staff-permissions').addEventListener('submit', async event => {
+      event.preventDefault();
+      const permissions = new FormData(event.currentTarget).getAll('permission');
+      await this.run(() => {
+        this.savePermissions(id, permissions);
+        this.defer(() => { toast('Đã lưu quyền nhân viên'); this.usersForm(); });
+      });
+    });
   },
   passwordForm(id) {
     if (!this.isAdmin()) return;
