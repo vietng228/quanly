@@ -15,7 +15,7 @@ function shop(role = 'admin') {
   const context = vm.createContext({
     window: {}, console, crypto: webcrypto, TextEncoder, TextDecoder, Uint8Array,
     btoa, atob, localStorage,
-    sessionStorage: { getItem: key => session.get(key) || null, setItem: (key, value) => session.set(key, value) },
+    sessionStorage: { getItem: key => session.get(key) || null, setItem: (key, value) => session.set(key, value), removeItem: key => session.delete(key) },
     state: { tab: 'sales' },
     document: { body: { classList: { add() {}, remove() {} } }, querySelectorAll: () => [] },
     toast() {}, setTimeout: () => 1, clearTimeout() {},
@@ -167,4 +167,41 @@ test('Khóa/đổi mật khẩu làm phiên nhân viên hết hiệu lực khi n
   assert.equal(vm.runInContext('!!Access.user', context), true);
   vm.runInContext(`Cloud._applying = true; const access = DB.getAccess(); access.users[1].version = '2'; DB.saveAccess(access); Cloud._applying = false;`, context);
   assert.equal(vm.runInContext('Access.user', context), null);
+});
+
+
+test('Ghi nhớ đăng nhập giữ phiên khi đóng tab, đăng xuất xóa cả hai bộ nhớ', () => {
+  const context = shop('staff');
+  vm.runInContext(`
+    if (!localStorage.getItem('qls_session')) throw new Error('Chưa lưu phiên');
+    Access.session = null;
+    Access.restoreSession();
+    if (Access.user?.id !== 'staff') throw new Error('Không khôi phục đăng nhập');
+    Access.clearSession();
+    Access.restoreSession();
+    if (Access.user || localStorage.getItem('qls_session') || sessionStorage.getItem('qls_session')) throw new Error('Đăng xuất chưa xóa phiên');
+  `, context);
+});
+
+test('Phiên tạm hết hạn và tài khoản đã đổi phiên hoặc bị khóa không được khôi phục', () => {
+  const context = shop('staff');
+  vm.runInContext(`
+    const user = DB.getAccess().users.find(user => user.id === 'staff');
+    Access.signIn(user, false);
+    if (localStorage.getItem('qls_session') || !sessionStorage.getItem('qls_session')) throw new Error('Lưu sai bộ nhớ');
+    Access.session.expires = 1;
+    sessionStorage.setItem('qls_session', JSON.stringify(Access.session));
+    Access.restoreSession();
+    if (Access.user) throw new Error('Phiên hết hạn còn hiệu lực');
+    Access.signIn(user);
+    Access.session.version = 'old';
+    localStorage.setItem('qls_session', JSON.stringify(Access.session));
+    Access.restoreSession();
+    if (Access.user || localStorage.getItem('qls_session')) throw new Error('Phiên cũ còn hiệu lực');
+    Access.signIn({ ...user, disabled: false });
+    Cloud._applying = true;
+    DB.saveAccess({ users: [{ ...user, disabled: true }] });
+    Access.restoreSession();
+    if (Access.user || localStorage.getItem('qls_session')) throw new Error('Tài khoản khóa còn hiệu lực');
+  `, context);
 });
