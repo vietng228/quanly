@@ -56,7 +56,7 @@ Có thể thêm link Pages vào màn hình chính bằng tính năng **Thêm và
 
 ## 6. Xem theo ngày, tuần và tháng
 
-Trong **Thêm → Tra cứu** có:
+Các màn **Tổng quan, Bán hàng, Nhập hàng, Trả NCC, Thu chi và Tra cứu** đều có:
 
 - Hôm nay / Hôm qua.
 - Tuần này / Tuần trước.
