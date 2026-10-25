@@ -197,6 +197,7 @@ async function init() {
   document.getElementById('bottomnav').addEventListener('click', (e) => {
     const btn = e.target.closest('.nav-btn');
     if (!btn) return;
+    e.preventDefault();
     setTab(btn.dataset.tab);
   });
 
@@ -955,7 +956,7 @@ function renderDashboard(app) {
       <span>💰 Doanh thu theo mặt hàng${s.itemStats.length > 5 ? ` (${s.itemStats.length})` : ''}</span>
       ${
         s.itemStats.length > 5
-          ? `<button class="link-btn" data-action="toggle-dash-items" style="font-size:12px; font-weight:600; color:#2563eb; background:none; border:none; padding:0">${
+          ? `<button class="link-btn" data-action="toggle-dash-items" style="font-size:12px; font-weight:600; color:var(--primary); background:none; border:none; padding:0">${
               state.dashShowAllItems ? 'Thu gọn' : 'Xem tất cả'
             }</button>`
           : ''
@@ -1277,7 +1278,7 @@ function openSaleDetailSheet(saleId) {
   const imeiHtml = imeiList.length
     ? `<div class="section-title" style="margin-top:14px">🔢 IMEI / Số seri đã bán (${imeiList.length})</div>
     <div class="chip-row" style="flex-wrap:wrap">
-      ${imeiList.map((im) => `<span class="chip" style="background:#fee2e2; border-color:#dc2626; color:#b91c1c; cursor:pointer" data-action="view-imei-detail" data-imei="${escapeHtml(im)}">${escapeHtml(im)}</span>`).join('')}
+      ${imeiList.map((im) => `<span class="chip" style="background:var(--status-sold-bg); border-color:#9c5363; color:var(--status-sold-text); cursor:pointer" data-action="view-imei-detail" data-imei="${escapeHtml(im)}">${escapeHtml(im)}</span>`).join('')}
     </div>
     <p class="help-text" style="margin:6px 0 0">Bấm vào 1 mã để xem đầy đủ lịch sử nhập + bán của máy đó.</p>`
     : '';
@@ -1363,7 +1364,7 @@ function openPurchaseReturnDetailSheet(returnId) {
   const imeiHtml = imeiList.length
     ? `<div class="section-title" style="margin-top:14px">🔢 IMEI / Số seri đã trả (${imeiList.length})</div>
     <div class="chip-row" style="flex-wrap:wrap">
-      ${imeiList.map((im) => `<span class="chip" style="background:#ffedd5; border-color:#c2410c; color:#c2410c; cursor:pointer" data-action="view-imei-detail" data-imei="${escapeHtml(im)}">${escapeHtml(im)}</span>`).join('')}
+      ${imeiList.map((im) => `<span class="chip" style="background:var(--status-return-bg); border-color:#a97943; color:var(--status-return-text); cursor:pointer" data-action="view-imei-detail" data-imei="${escapeHtml(im)}">${escapeHtml(im)}</span>`).join('')}
     </div>
     <p class="help-text" style="margin:6px 0 0">Bấm vào 1 mã để xem đầy đủ lịch sử nhập + bán + trả của máy đó.</p>`
     : '';
@@ -1500,7 +1501,7 @@ function openItemStockSheet(name) {
       availableImeis.length > 0
         ? `<p class="help-text" style="margin:0 0 6px">✅ Còn tồn kho (${availableImeis.length}) — bấm vào 1 mã để xem lịch sử nhập:</p>
       <div class="chip-row" style="flex-wrap:wrap; margin-bottom:10px">
-        ${availableImeis.map((im) => `<span class="chip" style="background:#dcfce7; border-color:#16a34a; color:#15803d; cursor:pointer" data-action="view-imei-detail" data-imei="${escapeHtml(im)}">${escapeHtml(im)}</span>`).join('')}
+        ${availableImeis.map((im) => `<span class="chip" style="background:var(--status-stock-bg); border-color:#4b996e; color:var(--status-stock-text); cursor:pointer" data-action="view-imei-detail" data-imei="${escapeHtml(im)}">${escapeHtml(im)}</span>`).join('')}
       </div>`
         : ''
     }
@@ -1511,7 +1512,7 @@ function openItemStockSheet(name) {
         ${soldImeis
           .map(
             ({ imei, sale }) =>
-              `<span class="chip" style="background:#fee2e2; border-color:#dc2626; color:#b91c1c; cursor:pointer" data-action="view-imei-detail" data-imei="${escapeHtml(imei)}" title="Bán ngày ${formatDateVN(sale.date)}">${escapeHtml(imei)} · ${formatDateVN(sale.date)}</span>`
+              `<span class="chip" style="background:var(--status-sold-bg); border-color:#9c5363; color:var(--status-sold-text); cursor:pointer" data-action="view-imei-detail" data-imei="${escapeHtml(imei)}" title="Bán ngày ${formatDateVN(sale.date)}">${escapeHtml(imei)} · ${formatDateVN(sale.date)}</span>`
           )
           .join('')}
       </div>`
@@ -1524,7 +1525,7 @@ function openItemStockSheet(name) {
         ${returnedImeis
           .map(
             ({ imei, ret }) =>
-              `<span class="chip" style="background:#ffedd5; border-color:#ea580c; color:#c2410c; cursor:pointer" data-action="view-imei-detail" data-imei="${escapeHtml(imei)}" title="Trả NCC ngày ${formatDateVN(ret.date)}">${escapeHtml(imei)} · ${formatDateVN(ret.date)}</span>`
+              `<span class="chip" style="background:var(--status-return-bg); border-color:#a97943; color:var(--status-return-text); cursor:pointer" data-action="view-imei-detail" data-imei="${escapeHtml(imei)}" title="Trả NCC ngày ${formatDateVN(ret.date)}">${escapeHtml(imei)} · ${formatDateVN(ret.date)}</span>`
           )
           .join('')}
       </div>`
@@ -1965,7 +1966,7 @@ function renderInventory(app) {
       </div>
       <div class="stat-card">
         <div class="label">Sắp hết (≤ ${LOW_STOCK_THRESHOLD})</div>
-        <div class="value" style="color:#b45309">${lowCount}</div>
+        <div class="value" style="color:var(--warning)">${lowCount}</div>
       </div>
     </div>
     <div id="inventory-list"></div>
@@ -5475,7 +5476,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=46').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=47').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
