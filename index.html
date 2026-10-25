@@ -2,9 +2,9 @@
 <html lang="vi">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Quản Lý Thu Chi &amp; Bán Hàng</title>
-<meta name="theme-color" content="#2563eb" />
+<meta name="theme-color" content="#0b0e14" />
 <meta name="description" content="Quản lý thu chi, nhập hàng, bán hàng và phân quyền nhân viên, đồng bộ GitHub trực tiếp" />
 <link rel="manifest" href="manifest.json" />
 <link rel="icon" href="icons/icon-192.png" />
@@ -12,39 +12,40 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Thu Chi Shop" />
-<link rel="stylesheet" href="css/style.css?v=46" />
+<link rel="stylesheet" href="css/style.css?v=47" />
 </head>
 <body>
 
 <header class="topbar">
   <h1 id="topbar-title">Tổng quan</h1>
-  <div id="cloud-status" class="cloud-status"></div>
+  <div id="cloud-status" class="cloud-status" role="status"></div>
+  <button type="button" class="icon-btn appearance-toggle" id="appearance-toggle" aria-label="Giảm độ trong suốt" aria-pressed="false" title="Giảm độ trong suốt">◐</button>
 </header>
 
 <main id="app"></main>
 
-<nav class="bottomnav" id="bottomnav">
-  <button class="nav-btn" data-tab="dashboard">
-    <span class="nav-icon">📊</span><span>Tổng quan</span>
-  </button>
-  <button class="nav-btn" data-tab="sales">
-    <span class="nav-icon">💵</span><span>Bán hàng</span>
-  </button>
-  <button class="nav-btn" data-tab="purchases">
-    <span class="nav-icon">📥</span><span>Nhập hàng</span>
-  </button>
-  <button class="nav-btn" data-tab="items">
-    <span class="nav-icon">📦</span><span>Mặt hàng</span>
-  </button>
-  <button class="nav-btn" data-tab="more">
-    <span class="nav-icon">☰</span><span>Thêm</span>
-  </button>
+<nav class="bottomnav" id="bottomnav" aria-label="Điều hướng chính">
+  <a class="nav-btn" data-tab="dashboard" href="#dashboard">
+    <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10m8 10V4m8 16v-7"/></svg></span><span>Tổng quan</span>
+  </a>
+  <a class="nav-btn" data-tab="sales" href="#sales">
+    <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 9h18m-5 6h2"/></svg></span><span>Bán hàng</span>
+  </a>
+  <a class="nav-btn" data-tab="purchases" href="#purchases">
+    <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-4-4 4 4 4-4M4 15v5h16v-5"/></svg></span><span>Nhập hàng</span>
+  </a>
+  <a class="nav-btn" data-tab="items" href="#items">
+    <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m3 7 9-4 9 4v10l-9 4-9-4Zm0 0 9 4 9-4M12 11v10M7 5l9 4"/></svg></span><span>Mặt hàng</span>
+  </a>
+  <a class="nav-btn" data-tab="more" href="#more">
+    <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14M5 12h14M5 18h14"/></svg></span><span>Thêm</span>
+  </a>
 </nav>
 
 <!-- Bottom sheet form dùng chung -->
 <div class="sheet-overlay" id="sheet-overlay">
   <div class="sheet" id="sheet">
-    <div class="sheet-handle"></div>
+    <div class="sheet-chrome"><div class="sheet-handle"></div><button type="button" class="icon-btn sheet-close" id="sheet-close" aria-label="Đóng cửa sổ">✕</button></div>
     <div id="sheet-content"></div>
   </div>
 </div>
@@ -53,9 +54,9 @@
 <div class="modal-overlay" id="picker-modal">
   <div class="modal-full">
     <div class="modal-header">
-      <button class="icon-btn" id="picker-close">✕</button>
+      <button class="icon-btn" id="picker-close" aria-label="Đóng chọn mặt hàng">✕</button>
       <input type="text" id="picker-search" placeholder="Tìm mặt hàng..." />
-      <button class="icon-btn" id="picker-scan">📷</button>
+      <button class="icon-btn" id="picker-scan" aria-label="Quét mã mặt hàng">📷</button>
     </div>
     <div id="picker-list" class="picker-list"></div>
   </div>
@@ -65,7 +66,7 @@
 <div class="modal-overlay" id="customer-picker-modal">
   <div class="modal-full">
     <div class="modal-header">
-      <button class="icon-btn" id="cust-picker-close">✕</button>
+      <button class="icon-btn" id="cust-picker-close" aria-label="Đóng chọn khách hàng">✕</button>
       <input type="text" id="cust-picker-search" placeholder="Tìm khách hàng..." />
       <div style="width:40px"></div>
     </div>
@@ -77,7 +78,7 @@
 <div class="modal-overlay" id="scanner-modal">
   <div class="modal-full">
     <div class="modal-header">
-      <button class="icon-btn" id="scanner-close">✕</button>
+      <button class="icon-btn" id="scanner-close" aria-label="Đóng máy quét">✕</button>
       <div class="modal-title">Quét mã vạch / QR</div>
       <div style="width:40px"></div>
     </div>
@@ -94,11 +95,12 @@
 <script src="vendor/html5-qrcode.min.js"></script>
 <script src="vendor/xlsx.full.min.js"></script>
 <script src="vendor/qrcode.js"></script>
-<script src="js/utils.js?v=46"></script>
-<script src="js/db.js?v=46"></script>
-<script src="js/cloud.js?v=46"></script>
-<script src="js/access.js?v=46"></script>
-<script src="js/scanner.js?v=46"></script>
-<script src="js/app.js?v=46"></script>
+<script src="js/utils.js?v=47"></script>
+<script src="js/db.js?v=47"></script>
+<script src="js/cloud.js?v=47"></script>
+<script src="js/access.js?v=47"></script>
+<script src="js/scanner.js?v=47"></script>
+<script src="js/app.js?v=47"></script>
+<script src="js/appearance.js?v=47"></script>
 </body>
 </html>
