@@ -1,5 +1,5 @@
 /* sw.js — service worker: cache toàn bộ app để chạy offline hoàn toàn */
-const CACHE_NAME = 'thuchi-shop-v47'; // Bump số này ở MỌI lần phát hành để buộc
+const CACHE_NAME = 'thuchi-shop-v48'; // Bump số này ở MỌI lần phát hành để buộc
 // trình duyệt xoá cache cũ và lấy bản mới — nếu quên bump, người dùng đã từng
 // mở app có thể bị kẹt ở bản cũ vĩnh viễn dù đã cập nhật code lên GitHub.
 // LƯU Ý: các ?v= bên dưới phải khớp CHÍNH XÁC với ?v= đang dùng trong
@@ -13,14 +13,14 @@ const ASSETS = [
   './fonts/google-sans-latin.woff2',
   './fonts/google-sans-latin-ext.woff2',
   './fonts/google-sans-vietnamese.woff2',
-  './css/style.css?v=47',
-  './js/utils.js?v=47',
-  './js/db.js?v=47',
-  './js/cloud.js?v=47',
-  './js/access.js?v=47',
-  './js/scanner.js?v=47',
-  './js/app.js?v=47',
-  './js/appearance.js?v=47',
+  './css/style.css?v=48',
+  './js/utils.js?v=48',
+  './js/db.js?v=48',
+  './js/cloud.js?v=48',
+  './js/access.js?v=48',
+  './js/scanner.js?v=48',
+  './js/app.js?v=48',
+  './js/appearance.js?v=48',
   './vendor/html5-qrcode.min.js',
   './vendor/xlsx.full.min.js',
   './vendor/qrcode.js',
