@@ -603,3 +603,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: #81b9ff; }
 #shop-login, .settings-item:has(> #connect-form) { background: #171c25; }
 @media (prefers-reduced-transparency: reduce) { .btn-danger { background: #4c1824; } }
 .reduce-transparency .btn-danger { background: #4c1824; }
+
+.form-row:has(#f-time) { flex-wrap: wrap; }
+.form-row:has(#f-time) > .form-group { flex: 1 1 140px; }

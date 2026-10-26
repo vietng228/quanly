@@ -15,6 +15,26 @@ function todayStr() {
   return toISODate(d);
 }
 
+function currentMinute() {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+}
+
+function recordTimeLabel(row) {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(row.time || '') ? row.time : 'Chưa có giờ';
+}
+
+function formatRecordDateTime(row) {
+  return `${formatDateVN(row.date)} · ${recordTimeLabel(row)}`;
+}
+
+function formatTimestampMinute(timestamp) {
+  if (!timestamp) return 'Chưa có thời gian';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return 'Chưa có thời gian';
+  return `${formatDateVN(toISODate(date))} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
 function toISODate(d) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');

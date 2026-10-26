@@ -57,6 +57,9 @@ const DB = {
   },
   saveItem(item) {
     const list = readList(DB_KEYS.items);
+    const previous = list.find(row => row.id === item.id);
+    item.createdAt = previous?.createdAt || item.createdAt;
+    item.updatedAt = Date.now();
     if (item.id) {
       const idx = list.findIndex((i) => i.id === item.id);
       if (idx >= 0) list[idx] = item;
@@ -80,6 +83,11 @@ const DB = {
   },
   savePurchase(p) {
     const list = readList(DB_KEYS.purchases);
+    const previous = list.find(row => row.id === p.id);
+    p.createdAt = previous?.createdAt || p.createdAt;
+    const savedAt = new Date();
+    p.updatedAt = savedAt.getTime();
+    if (p.time === undefined) p.time = previous ? previous.time : `${String(savedAt.getHours()).padStart(2, '0')}:${String(savedAt.getMinutes()).padStart(2, '0')}`;
     if (p.id) {
       const idx = list.findIndex((x) => x.id === p.id);
       if (idx >= 0) list[idx] = p;
@@ -108,6 +116,11 @@ const DB = {
   },
   savePurchaseReturn(r) {
     const list = readList(DB_KEYS.purchaseReturns);
+    const previous = list.find(row => row.id === r.id);
+    r.createdAt = previous?.createdAt || r.createdAt;
+    const savedAt = new Date();
+    r.updatedAt = savedAt.getTime();
+    if (r.time === undefined) r.time = previous ? previous.time : `${String(savedAt.getHours()).padStart(2, '0')}:${String(savedAt.getMinutes()).padStart(2, '0')}`;
     if (r.id) {
       const idx = list.findIndex((x) => x.id === r.id);
       if (idx >= 0) list[idx] = r;
@@ -130,6 +143,11 @@ const DB = {
   },
   saveSale(s) {
     const list = readList(DB_KEYS.sales);
+    const previous = list.find(row => row.id === s.id);
+    s.createdAt = previous?.createdAt || s.createdAt;
+    const savedAt = new Date();
+    s.updatedAt = savedAt.getTime();
+    if (s.time === undefined) s.time = previous ? previous.time : `${String(savedAt.getHours()).padStart(2, '0')}:${String(savedAt.getMinutes()).padStart(2, '0')}`;
     if (s.id) {
       const idx = list.findIndex((x) => x.id === s.id);
       if (idx >= 0) list[idx] = s;
@@ -155,6 +173,9 @@ const DB = {
   },
   saveCustomer(c) {
     const list = readList(DB_KEYS.customers);
+    const previous = list.find(row => row.id === c.id);
+    c.createdAt = previous?.createdAt || c.createdAt;
+    c.updatedAt = Date.now();
     if (c.id) {
       const idx = list.findIndex((x) => x.id === c.id);
       if (idx >= 0) list[idx] = c;
@@ -177,6 +198,11 @@ const DB = {
   },
   saveTransaction(t) {
     const list = readList(DB_KEYS.transactions);
+    const previous = list.find(row => row.id === t.id);
+    t.createdAt = previous?.createdAt || t.createdAt;
+    const savedAt = new Date();
+    t.updatedAt = savedAt.getTime();
+    if (t.time === undefined) t.time = previous ? previous.time : `${String(savedAt.getHours()).padStart(2, '0')}:${String(savedAt.getMinutes()).padStart(2, '0')}`;
     if (t.id) {
       const idx = list.findIndex((x) => x.id === t.id);
       if (idx >= 0) list[idx] = t;

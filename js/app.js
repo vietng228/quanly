@@ -141,7 +141,7 @@ const state = {
   period: 'day',
   customStart: todayStr(),
   customEnd: todayStr(),
-  cashPeriod: 'all',
+  cashPeriod: 'day',
   cashCustomStart: todayStr(),
   cashCustomEnd: todayStr(),
   itemSearch: '',
@@ -149,19 +149,19 @@ const state = {
   customerSearch: '',
   inventorySearch: '',
   lookupQuery: '',
-  lookupPeriod: 'all',
+  lookupPeriod: 'day',
   lookupCustomStart: todayStr(),
   lookupCustomEnd: todayStr(),
   dashShowAllItems: false,
-  purchasePeriod: 'all',
+  purchasePeriod: 'day',
   purchaseCustomStart: todayStr(),
   purchaseCustomEnd: todayStr(),
   purchaseSearch: '',
-  salePeriod: 'all',
+  salePeriod: 'day',
   saleCustomStart: todayStr(),
   saleCustomEnd: todayStr(),
   saleSearch: '',
-  purchaseReturnPeriod: 'all',
+  purchaseReturnPeriod: 'day',
   purchaseReturnCustomStart: todayStr(),
   purchaseReturnCustomEnd: todayStr(),
   purchaseReturnSearch: '',
@@ -817,6 +817,7 @@ function renderCustomerPickerList(filter) {
       (c) => `
     <div class="picker-item" data-action="pick-this-customer" data-id="${c.id}">
       <div class="li-title">${escapeHtml(c.name)}</div>
+              <div class="li-sub">Tạo: ${formatTimestampMinute(c.createdAt)}</div>
       <div class="li-sub">${escapeHtml(c.phone || '')}${c.address ? ' · ' + escapeHtml(c.address) : ''}</div>
     </div>`
     )
@@ -1094,6 +1095,7 @@ function renderItems(app) {
               <div class="li-sub">Nhập ${formatMoney(first.defaultCostPrice)} · Bán ${formatMoney(first.defaultSellPrice)}${first.barcode && !merged ? ' · #' + escapeHtml(first.barcode) : ''}</div>
               ${!merged && (first.productCode || first.model) ? `<div class="li-sub">${first.productCode ? '🏷️ Mã SP: ' + escapeHtml(first.productCode) : ''}${first.productCode && first.model ? ' · ' : ''}${first.model ? '📱 Model: ' + escapeHtml(first.model) : ''}</div>` : ''}
               <div class="li-sub">Đã nhập ${purchased} · Đã bán ${sold} · Tồn ${stock} ${stockBadge}</div>
+              ${!merged ? `<div class="li-sub">Tạo: ${formatTimestampMinute(first.createdAt)}</div>` : ''}
             </div>
             ${
               merged
@@ -1193,7 +1195,7 @@ function openImeiDetailSheet(imei) {
   const purchaseBlock = purchase
     ? `<div class="list-item">
         <div class="li-main">
-          <div class="li-title">${formatDateVN(purchase.date)} <span class="badge nhap">Nhập</span></div>
+          <div class="li-title">${formatRecordDateTime(purchase)} <span class="badge nhap">Nhập</span></div>
           <div class="li-sub">Giá nhập ${formatMoney(purchase.costPrice)}${purchase.note ? ' · ' + escapeHtml(purchase.note) : ''}</div>
         </div>
         <div class="li-actions">
@@ -1208,7 +1210,7 @@ function openImeiDetailSheet(imei) {
         const debt = getSaleDebt(sale);
         return `<div class="list-item">
         <div class="li-main">
-          <div class="li-title">${formatDateVN(sale.date)} <span class="badge ban">Bán</span></div>
+          <div class="li-title">${formatRecordDateTime(sale)} <span class="badge ban">Bán</span></div>
           <div class="li-sub">Giá bán ${formatMoney(sale.sellPrice)} · Lãi <span class="${profit >= 0 ? 'pos' : 'neg'}">${formatMoney(profit)}</span></div>
           <div class="li-sub">👤 ${escapeHtml(sale.customerName || 'Khách lẻ')}${sale.customerPhone ? ' · ' + escapeHtml(sale.customerPhone) : ''} · ${escapeHtml(sale.paymentMethod || 'Tiền mặt')}</div>
           ${debt > 0 ? `<div class="li-sub">💳 Còn nợ: <b class="neg">${formatMoney(debt)}</b></div>` : ''}
@@ -1221,13 +1223,13 @@ function openImeiDetailSheet(imei) {
       </div>`;
       })()
     : ret
-    ? `<div class="empty-state" style="padding:16px">↩️ Máy này đã trả lại nhà cung cấp ngày ${formatDateVN(ret.date)}, không còn ở cửa hàng.</div>`
+    ? `<div class="empty-state" style="padding:16px">↩️ Máy này đã trả lại nhà cung cấp ngày ${formatRecordDateTime(ret)}, không còn ở cửa hàng.</div>`
     : '<div class="empty-state" style="padding:16px">✅ Máy này còn tồn kho, chưa bán.</div>';
 
   const returnBlock = ret
     ? `<div class="list-item">
         <div class="li-main">
-          <div class="li-title">${formatDateVN(ret.date)} <span class="badge tra">Trả NCC</span></div>
+          <div class="li-title">${formatRecordDateTime(ret)} <span class="badge tra">Trả NCC</span></div>
           <div class="li-sub">Giá hoàn ${formatMoney(ret.costPrice)}${ret.note ? ' · ' + escapeHtml(ret.note) : ''}</div>
         </div>
         <div class="li-actions">
@@ -1311,7 +1313,7 @@ function openSaleDetailSheet(saleId) {
 
   openSheet(`
     <div class="sheet-title">💵 Đơn bán · ${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</div>
-    <p class="help-text" style="margin-top:-8px">${formatDateVN(s.date)}${s.invoiceNo ? ' · Số HĐ: ' + escapeHtml(s.invoiceNo) : ''}</p>
+    <p class="help-text" style="margin-top:-8px">${formatRecordDateTime(s)}${s.invoiceNo ? ' · Số HĐ: ' + escapeHtml(s.invoiceNo) : ''}</p>
     <div class="section-title">👤 Người mua</div>
     <div class="customer-block" style="margin-top:-6px">
       <div>${escapeHtml(buyerName)}</div>
@@ -1332,6 +1334,7 @@ function openSaleDetailSheet(saleId) {
     </div>
     ${imeiHtml}
     ${orderSiblingsHtml}
+    ${s.paymentHistory?.length ? `<div class="section-title">Lịch sử thu nợ</div>${s.paymentHistory.map(payment => `<p class="help-text">${formatTimestampMinute(payment.at)} · ${formatMoney(payment.amount)}</p>`).join('')}` : ''}
     ${s.note ? `<div class="section-title" style="margin-top:14px">📝 Ghi chú</div><p class="help-text" style="margin:0">${escapeHtml(s.note)}</p>` : ''}
     ${item ? `<div class="list-item" data-action="view-item-stock" data-name="${escapeHtml(item.name)}" style="cursor:pointer; margin-top:14px">
       <div class="item-icon">${categoryIcon(item.category)}</div>
@@ -1372,7 +1375,7 @@ function openPurchaseReturnDetailSheet(returnId) {
   openSheet(`
     <div class="sheet-title">↩️ Trả hàng nhập · ${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</div>
     ${r.supplierName ? `<p class="help-text">Nhà cung cấp: ${escapeHtml(r.supplierName)}</p>` : ''}
-    <p class="help-text" style="margin-top:-8px">${formatDateVN(r.date)}</p>
+    <p class="help-text" style="margin-top:-8px">${formatRecordDateTime(r)}</p>
     <div class="stat-grid" style="margin-top:8px">
       <div class="stat-card"><div class="label">Số lượng × Giá hoàn</div><div class="value" style="font-size:16px">${r.quantity} × ${formatMoney(r.costPrice)}</div></div>
       <div class="stat-card"><div class="label">Thành tiền</div><div class="value neg">${formatMoney(total)}</div></div>
@@ -1512,7 +1515,7 @@ function openItemStockSheet(name) {
         ${soldImeis
           .map(
             ({ imei, sale }) =>
-              `<span class="chip" style="background:var(--status-sold-bg); border-color:#9c5363; color:var(--status-sold-text); cursor:pointer" data-action="view-imei-detail" data-imei="${escapeHtml(imei)}" title="Bán ngày ${formatDateVN(sale.date)}">${escapeHtml(imei)} · ${formatDateVN(sale.date)}</span>`
+              `<span class="chip" style="background:var(--status-sold-bg); border-color:#9c5363; color:var(--status-sold-text); cursor:pointer" data-action="view-imei-detail" data-imei="${escapeHtml(imei)}" title="Bán ngày ${formatRecordDateTime(sale)}">${escapeHtml(imei)} · ${formatRecordDateTime(sale)}</span>`
           )
           .join('')}
       </div>`
@@ -1525,7 +1528,7 @@ function openItemStockSheet(name) {
         ${returnedImeis
           .map(
             ({ imei, ret }) =>
-              `<span class="chip" style="background:var(--status-return-bg); border-color:#a97943; color:var(--status-return-text); cursor:pointer" data-action="view-imei-detail" data-imei="${escapeHtml(imei)}" title="Trả NCC ngày ${formatDateVN(ret.date)}">${escapeHtml(imei)} · ${formatDateVN(ret.date)}</span>`
+              `<span class="chip" style="background:var(--status-return-bg); border-color:#a97943; color:var(--status-return-text); cursor:pointer" data-action="view-imei-detail" data-imei="${escapeHtml(imei)}" title="Trả NCC ngày ${formatRecordDateTime(ret)}">${escapeHtml(imei)} · ${formatRecordDateTime(ret)}</span>`
           )
           .join('')}
       </div>`
@@ -1569,8 +1572,9 @@ function openItemStockSheet(name) {
             (p) => `
       <div class="list-item">
         <div class="li-main">
-          <div class="li-title">${formatDateVN(p.date)} <span class="badge nhap">Nhập</span></div>
-          <div class="li-sub">SL ${p.quantity} × ${formatMoney(p.costPrice)} = ${formatMoney(p.costPrice * p.quantity)}${p.note ? ' · ' + escapeHtml(p.note) : ''}</div>
+          <div class="li-title">${formatRecordDateTime(p)} <span class="badge nhap">Nhập</span></div>
+          <div class="li-sub">Ghi nhận: ${recordTimeLabel(p)}</div>
+              <div class="li-sub">SL ${p.quantity} × ${formatMoney(p.costPrice)} = ${formatMoney(p.costPrice * p.quantity)}${p.note ? ' · ' + escapeHtml(p.note) : ''}</div>
           ${p.imei ? `<div class="li-sub">🔢 ${escapeHtml(p.imei)}</div>` : ''}
         </div>
         <div class="li-actions">
@@ -1595,8 +1599,9 @@ function openItemStockSheet(name) {
             return `
       <div class="list-item">
         <div class="li-main">
-          <div class="li-title">${formatDateVN(s.date)} <span class="badge ban">Bán</span></div>
-          <div class="li-sub">SL ${s.quantity} × ${formatMoney(s.sellPrice)} = ${formatMoney(s.sellPrice * s.quantity)}</div>
+          <div class="li-title">${formatRecordDateTime(s)} <span class="badge ban">Bán</span></div>
+          <div class="li-sub">Bán lúc: ${recordTimeLabel(s)}</div>
+              <div class="li-sub">SL ${s.quantity} × ${formatMoney(s.sellPrice)} = ${formatMoney(s.sellPrice * s.quantity)}</div>
           <div class="li-sub">Giá vốn lúc bán ${formatMoney(s.costPriceAtSale || 0)} · Lãi ${formatMoney(profit)}</div>
           ${s.imei ? `<div class="li-sub">🔢 ${escapeHtml(s.imei)}</div>` : ''}
         </div>
@@ -1621,8 +1626,9 @@ function openItemStockSheet(name) {
         (r) => `
       <div class="list-item">
         <div class="li-main">
-          <div class="li-title">${formatDateVN(r.date)} <span class="badge tra">Trả NCC</span></div>
-          <div class="li-sub">SL ${r.quantity} × ${formatMoney(r.costPrice)} = ${formatMoney(r.costPrice * r.quantity)}${r.note ? ' · ' + escapeHtml(r.note) : ''}</div>
+          <div class="li-title">${formatRecordDateTime(r)} <span class="badge tra">Trả NCC</span></div>
+          <div class="li-sub">Trả NCC: ${recordTimeLabel(r)}</div>
+              <div class="li-sub">SL ${r.quantity} × ${formatMoney(r.costPrice)} = ${formatMoney(r.costPrice * r.quantity)}${r.note ? ' · ' + escapeHtml(r.note) : ''}</div>
           ${r.imei ? `<div class="li-sub">🔢 ${escapeHtml(r.imei)}</div>` : ''}
         </div>
         <div class="li-actions">
@@ -2126,6 +2132,7 @@ function renderLookup(app) {
         <div class="list-item" data-action="view-customer-detail" data-id="${c.id}">
           <div class="li-main">
             <div class="li-title">${escapeHtml(c.name)}</div>
+              <div class="li-sub">Tạo: ${formatTimestampMinute(c.createdAt)}</div>
             <div class="li-sub">${escapeHtml(c.phone || '')}${c.address ? ' · ' + escapeHtml(c.address) : ''}</div>
             <div class="li-sub">Bấm để xem đầy đủ thông tin + lịch sử mua ›</div>
           </div>
@@ -2146,7 +2153,7 @@ function renderLookup(app) {
           <div class="item-icon">${categoryIcon(item?.category)}</div>
           <div class="li-main">
             <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</div>
-            <div class="li-sub">${formatDateVN(s.date)} · SL ${s.quantity} × ${formatMoney(s.sellPrice)}</div>
+            <div class="li-sub">${formatRecordDateTime(s)} · SL ${s.quantity} × ${formatMoney(s.sellPrice)}</div>
             <div class="li-sub">👤 ${escapeHtml(s.customerName || 'Khách lẻ')}${s.customerPhone ? ' · ' + escapeHtml(s.customerPhone) : ''}</div>
             ${s.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(s.imei)}</div>` : ''}
           </div>
@@ -2172,7 +2179,7 @@ function renderLookup(app) {
           <div class="item-icon">${categoryIcon(item?.category)}</div>
           <div class="li-main">
             <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</div>
-            <div class="li-sub">${formatDateVN(p.date)} · SL ${p.quantity} × ${formatMoney(p.costPrice)}</div>
+            <div class="li-sub">${formatRecordDateTime(p)} · SL ${p.quantity} × ${formatMoney(p.costPrice)}</div>
             ${p.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(p.imei)}</div>` : ''}
           </div>
         </div>`;
@@ -2192,7 +2199,7 @@ function renderLookup(app) {
           <div class="item-icon">${categoryIcon(item?.category)}</div>
           <div class="li-main">
             <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</div>
-            <div class="li-sub">${formatDateVN(r.date)} · SL ${r.quantity} × ${formatMoney(r.costPrice)}</div>
+            <div class="li-sub">${formatRecordDateTime(r)} · SL ${r.quantity} × ${formatMoney(r.costPrice)}</div>
             ${r.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(r.imei)}</div>` : ''}
           </div>
         </div>`;
@@ -2218,6 +2225,7 @@ function openItemForm(item) {
   const isCustomCat = cat && !CATEGORIES.includes(cat);
   openSheet(`
     <div class="sheet-title">${isEdit ? 'Sửa mặt hàng' : 'Thêm mặt hàng mới'}</div>
+    ${item ? `<p class="help-text">Tạo: ${formatTimestampMinute(item.createdAt)} · Cập nhật: ${formatTimestampMinute(item.updatedAt || item.createdAt)}</p>` : ''}
     <div class="form-group">
       <label>Tên mặt hàng *</label>
       <input type="text" id="f-item-name" value="${escapeHtml(item?.name || '')}" placeholder="VD: Tai nghe Bluetooth ABC" />
@@ -2382,7 +2390,7 @@ function wireCustomRangeInputs(prefix) {
 
 function groupRowsByDate(rows) {
   const groups = [];
-  rows.forEach((r) => {
+  [...rows].sort((a, b) => b.date.localeCompare(a.date) || (b.time || '').localeCompare(a.time || '') || (b.createdAt || 0) - (a.createdAt || 0)).forEach((r) => {
     const last = groups[groups.length - 1];
     if (last && last.date === r.date) last.rows.push(r);
     else groups.push({ date: r.date, rows: [r] });
@@ -2463,6 +2471,7 @@ function renderPurchases(app) {
             <div class="item-icon" ${item ? `data-action="view-item-detail" data-id="${item.id}"` : ''}>${categoryIcon(item?.category)}</div>
             <div class="li-main" ${item ? `data-action="view-item-detail" data-id="${item.id}"` : ''}>
               <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')} <span class="badge ${isReturn ? 'tra' : 'nhap'}">${isReturn ? '↩️ Trả NCC' : 'Nhập'}</span></div>
+              <div class="li-sub">Ghi nhận: ${recordTimeLabel(p)}</div>
               <div class="li-sub">SL ${p.quantity} × ${formatMoney(p.costPrice)}${p.note ? ' · ' + escapeHtml(p.note) : ''}</div>
               ${p.supplierName ? `<div class="li-sub">NCC: ${escapeHtml(p.supplierName)}</div>` : ''}
               ${p.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(p.imei)}</div>` : ''}
@@ -2551,6 +2560,7 @@ function renderPurchaseReturns(app) {
             <div class="item-icon" data-action="view-purchase-return-detail" data-id="${r.id}">${categoryIcon(item?.category)}</div>
             <div class="li-main" data-action="view-purchase-return-detail" data-id="${r.id}">
               <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')} <span class="badge tra">↩️ Trả NCC</span></div>
+              <div class="li-sub">Trả NCC: ${recordTimeLabel(r)}</div>
               <div class="li-sub">SL ${r.quantity} × ${formatMoney(r.costPrice)}${r.note ? ' · ' + escapeHtml(r.note) : ''}</div>
               ${r.supplierName ? `<div class="li-sub">NCC: ${escapeHtml(r.supplierName)}</div>` : ''}
               ${r.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(r.imei)}</div>` : ''}
@@ -2765,6 +2775,11 @@ function openPurchaseForm(p) {
         <input type="date" id="f-date" value="${p?.date || todayStr()}" />
       </div>
       <div class="form-group">
+        <label>Giờ/phút</label>
+        <input type="time" id="f-time" step="60" value="${p?.time || ''}" />
+        <span class="help-text">Để trống khi tạo mới: lấy giờ lúc lưu. Phiếu cũ chưa có giờ được giữ nguyên.</span>
+      </div>
+      <div class="form-group">
         <label>Số lượng</label>
         <input type="number" id="f-qty" value="${initialQty}" min="1" />
       </div>
@@ -2928,6 +2943,7 @@ function submitPurchaseForm() {
     id: formDraft.editId,
     itemId: formDraft.itemId,
     date: document.getElementById('f-date').value || todayStr(),
+    time: document.getElementById('f-time').value || undefined,
     quantity: Number(document.getElementById('f-qty').value) || 1,
     costPrice: parseMoneyInput(document.getElementById('f-cost-price').value),
     imei,
@@ -2976,6 +2992,11 @@ function openPurchaseReturnForm(r) {
       <div class="form-group">
         <label>Ngày trả</label>
         <input type="date" id="f-date" value="${r?.date || todayStr()}" />
+      </div>
+      <div class="form-group">
+        <label>Giờ/phút</label>
+        <input type="time" id="f-time" step="60" value="${r?.time || ''}" />
+        <span class="help-text">Để trống khi tạo mới: lấy giờ lúc lưu. Phiếu cũ chưa có giờ được giữ nguyên.</span>
       </div>
       <div class="form-group">
         <label>Số lượng trả</label>
@@ -3055,6 +3076,7 @@ function submitPurchaseReturnForm() {
     id: formDraft.editId,
     itemId: formDraft.itemId,
     date: document.getElementById('f-date').value || todayStr(),
+    time: document.getElementById('f-time').value || undefined,
     quantity,
     costPrice: parseMoneyInput(document.getElementById('f-cost-price').value),
     imei,
@@ -3128,6 +3150,7 @@ function renderSales(app) {
             <div class="item-icon" data-action="view-sale-detail" data-id="${s.id}">${categoryIcon(item?.category)}</div>
             <div class="li-main" data-action="view-sale-detail" data-id="${s.id}">
               <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')} <span class="badge ban">Bán</span></div>
+              <div class="li-sub">Bán lúc: ${recordTimeLabel(s)}</div>
               <div class="li-sub">SL ${s.quantity} × ${formatMoney(s.sellPrice)}</div>
               <div class="li-sub">👤 ${escapeHtml(s.customerName || 'Khách lẻ')}${s.customerPhone ? ' · ' + escapeHtml(s.customerPhone) : ''}${s.customerAddress ? ' · ' + escapeHtml(s.customerAddress) : ''}</div>
               ${s.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(s.imei)}</div>` : ''}
@@ -3335,6 +3358,11 @@ function openNewSaleOrderForm() {
         <input type="date" id="f-date" value="${todayStr()}" />
       </div>
       <div class="form-group">
+        <label>Giờ/phút</label>
+        <input type="time" id="f-time" step="60" value="${''}" />
+        <span class="help-text">Để trống khi tạo mới: lấy giờ lúc lưu. Phiếu cũ chưa có giờ được giữ nguyên.</span>
+      </div>
+      <div class="form-group">
         <label>Hình thức thanh toán</label>
         <select id="f-payment-method">
           ${['Tiền mặt', 'Chuyển khoản', 'Khác'].map((m) => `<option value="${m}" ${m === 'Tiền mặt' ? 'selected' : ''}>${m}</option>`).join('')}
@@ -3487,6 +3515,7 @@ function submitNewSaleOrderForm() {
   }
 
   const saleDate = document.getElementById('f-date').value || todayStr();
+  const saleTime = document.getElementById('f-time').value || currentMinute();
   const paymentMethod = document.getElementById('f-payment-method').value;
   const discountPercent = Number(document.getElementById('f-discount-percent').value) || 0;
   const note = document.getElementById('f-note').value.trim();
@@ -3542,6 +3571,7 @@ function submitNewSaleOrderForm() {
       itemId: l.itemId,
       customerId,
       date: saleDate,
+      time: saleTime,
       quantity,
       sellPrice: parseMoneyInput(l.sellPrice),
       costPriceAtSale: costBasis,
@@ -3593,6 +3623,11 @@ function openSaleEditForm(s) {
       <div class="form-group">
         <label>Ngày bán</label>
         <input type="date" id="f-date" value="${s?.date || todayStr()}" />
+      </div>
+      <div class="form-group">
+        <label>Giờ/phút</label>
+        <input type="time" id="f-time" step="60" value="${s?.time || ''}" />
+        <span class="help-text">Để trống khi tạo mới: lấy giờ lúc lưu. Phiếu cũ chưa có giờ được giữ nguyên.</span>
       </div>
       <div class="form-group">
         <label>Số lượng</label>
@@ -3752,6 +3787,7 @@ function submitSaleForm() {
   }
 
   const saleDate = document.getElementById('f-date').value || todayStr();
+  const saleTime = document.getElementById('f-time').value || undefined;
   // Giá vốn: khớp đúng IMEI đã bán với đúng lô nhập chứa nó, phần còn lại
   // (không có IMEI) tính theo FIFO — xem computeFifoSaleCosts. Dựng 1 bản
   // nháp của chính đơn đang lưu để tính đúng vị trí của nó trong dòng thời
@@ -3771,6 +3807,7 @@ function submitSaleForm() {
     itemId: formDraft.itemId,
     customerId,
     date: saleDate,
+    time: saleTime,
     quantity,
     sellPrice: parseMoneyInput(document.getElementById('f-sell-price').value),
     costPriceAtSale: costBasis,
@@ -3910,9 +3947,10 @@ function printInvoice(sale) {
     ${shop.address ? `<div>Địa chỉ: ${escapeHtml(shop.address)}</div>` : ''}
     ${shop.phone ? `<div>Điện thoại: ${escapeHtml(shop.phone)}</div>` : ''}
   </div>
+  <div class="help-text">Xuất/in hóa đơn: ${formatTimestampMinute(Date.now())}</div>
   <div class="invoice-title">HÓA ĐƠN BÁN HÀNG</div>
   <div class="center">Số HĐ: ${escapeHtml(invoiceNo)}</div>
-  <div class="center">${formatDateVNFull(sale.date)}</div>
+  <div class="center">${formatDateVNFull(sale.date)} · ${recordTimeLabel(sale)}</div>
   <div class="customer-block section-gap">
     <div>Khách hàng: ${escapeHtml(sale.customerName || 'Khách lẻ')}</div>
     ${sale.customerPhone ? `<div>SĐT: ${escapeHtml(sale.customerPhone)}</div>` : ''}
@@ -4056,9 +4094,10 @@ function printOrderInvoice(lines) {
     ${shop.address ? `<div>Địa chỉ: ${escapeHtml(shop.address)}</div>` : ''}
     ${shop.phone ? `<div>Điện thoại: ${escapeHtml(shop.phone)}</div>` : ''}
   </div>
+  <div class="help-text">Xuất/in hóa đơn: ${formatTimestampMinute(Date.now())}</div>
   <div class="invoice-title">HÓA ĐƠN BÁN HÀNG</div>
   <div class="center">Số HĐ: ${escapeHtml(invoiceNo)}</div>
-  <div class="center">${formatDateVNFull(primary.date)}</div>
+  <div class="center">${formatDateVNFull(primary.date)} · ${recordTimeLabel(primary)}</div>
   <div class="customer-block section-gap">
     <div>Khách hàng: ${escapeHtml(primary.customerName || 'Khách lẻ')}</div>
     ${primary.customerPhone ? `<div>SĐT: ${escapeHtml(primary.customerPhone)}</div>` : ''}
@@ -4144,6 +4183,7 @@ function renderCustomers(app) {
         <div class="list-item" data-action="view-customer-detail" data-id="${c.id}">
           <div class="li-main">
             <div class="li-title">${escapeHtml(c.name)}</div>
+              <div class="li-sub">Tạo: ${formatTimestampMinute(c.createdAt)}</div>
             <div class="li-sub">${escapeHtml(c.phone || '')}${c.address ? ' · ' + escapeHtml(c.address) : ''}</div>
             <div class="li-sub">${sales.length} đơn đã mua · Tổng ${formatMoney(totalSpent)}</div>
             ${debt > 0 ? `<div class="li-sub">💳 Còn nợ: <b class="neg">${formatMoney(debt)}</b></div>` : ''}
@@ -4195,8 +4235,9 @@ function openCustomerDetailSheet(customerId) {
         <div class="item-icon">${categoryIcon(item?.category)}</div>
         <div class="li-main">
           <div class="li-title">${escapeHtml(item ? item.name : '(Mặt hàng đã xoá)')}</div>
-          <div class="li-sub">${formatDateVN(s.date)} <span class="badge ban">Bán</span></div>
-          <div class="li-sub">SL ${s.quantity} × ${formatMoney(s.sellPrice)} = ${formatMoney(total)}</div>
+          <div class="li-sub">${formatRecordDateTime(s)} <span class="badge ban">Bán</span></div>
+          <div class="li-sub">Bán lúc: ${recordTimeLabel(s)}</div>
+              <div class="li-sub">SL ${s.quantity} × ${formatMoney(s.sellPrice)} = ${formatMoney(total)}</div>
           <div class="li-sub">Giá vốn ${formatMoney(s.costPriceAtSale || 0)} · Lãi <span class="${profit >= 0 ? 'pos' : 'neg'}">${formatMoney(profit)}</span> · ${escapeHtml(s.paymentMethod || 'Tiền mặt')}</div>
           ${debt > 0 ? `<div class="li-sub">💳 Đã trả ${formatMoney(getSalePaid(s))} · Còn nợ <b class="neg">${formatMoney(debt)}</b></div>` : ''}
           ${s.imei ? `<div class="li-sub">🔢 IMEI: ${escapeHtml(s.imei)}</div>` : ''}
@@ -4296,7 +4337,7 @@ function submitCollectDebtForm() {
   const amount = Math.max(0, parseMoneyInput(document.getElementById('f-collect-amount').value));
   if (amount <= 0) { toast('Vui lòng nhập số tiền thu lớn hơn 0', true); return; }
   const newPaid = Math.min(total, currentPaid + amount);
-  DB.saveSale({ ...s, paidAmount: newPaid });
+  DB.saveSale({ ...s, paidAmount: newPaid, paymentHistory: [...(s.paymentHistory || []), { amount: newPaid - currentPaid, at: Date.now() }] });
   toast(newPaid >= total ? '✅ Đã thu đủ, hết nợ' : 'Đã ghi nhận thu nợ 1 phần');
   const returnCustomerId = formDraft.returnCustomerId;
   closeSheet();
@@ -4346,6 +4387,7 @@ function openCustomerForm(c) {
   formDraft.editId = c ? c.id : null;
   openSheet(`
     <div class="sheet-title">${isEdit ? 'Sửa khách hàng' : 'Thêm khách hàng mới'}</div>
+    ${c ? `<p class="help-text">Tạo: ${formatTimestampMinute(c.createdAt)} · Cập nhật: ${formatTimestampMinute(c.updatedAt || c.createdAt)}</p>` : ''}
     <div class="form-group">
       <label>Tên khách hàng *</label>
       <input type="text" id="f-c-name" value="${escapeHtml(c?.name || '')}" placeholder="Nguyễn Văn A" />
@@ -4459,7 +4501,7 @@ function renderCashflow(app) {
       <div class="list-item">
         <div class="li-main">
           <div class="li-title">${escapeHtml(t.category || (t.type === 'thu' ? 'Khoản thu' : 'Khoản chi'))} <span class="badge ${t.type}">${t.type === 'thu' ? 'Thu' : 'Chi'}</span></div>
-          <div class="li-sub">${formatDateVN(t.date)}${t.note ? ' · ' + escapeHtml(t.note) : ''}</div>
+          <div class="li-sub">${formatRecordDateTime(t)}${t.note ? ' · ' + escapeHtml(t.note) : ''}</div>
         </div>
         <div class="li-right">
           <div class="li-amount ${t.type === 'thu' ? 'pos' : 'neg'}">${t.type === 'thu' ? '+' : '-'}${formatMoney(t.amount)}</div>
@@ -4497,6 +4539,11 @@ function openTransactionForm(t) {
         <input type="date" id="f-date" value="${t?.date || todayStr()}" />
       </div>
       <div class="form-group">
+        <label>Giờ/phút</label>
+        <input type="time" id="f-time" step="60" value="${t?.time || ''}" />
+        <span class="help-text">Để trống khi tạo mới: lấy giờ lúc lưu. Phiếu cũ chưa có giờ được giữ nguyên.</span>
+      </div>
+      <div class="form-group">
         <label>Số tiền</label>
         <input type="number" id="f-amount" value="${t?.amount ?? ''}" min="0" placeholder="0" />
       </div>
@@ -4524,6 +4571,7 @@ function submitTransactionForm() {
     id: formDraft.editId,
     type: formDraft.txType,
     date: document.getElementById('f-date').value || todayStr(),
+    time: document.getElementById('f-time').value || undefined,
     amount,
     category: document.getElementById('f-category').value.trim(),
     note: document.getElementById('f-note').value.trim(),
@@ -5205,6 +5253,7 @@ async function importProductListFromExcel(file) {
           .map((s) => s.trim())
           .filter(Boolean);
         DB.savePurchase({
+          time: '',
           id: null,
           itemId: saved.id,
           date: todayStr(),
@@ -5281,6 +5330,7 @@ async function importPurchasesFromExcel(file) {
       id: null,
       itemId: item.id,
       date,
+      time: '',
       quantity,
       costPrice: parseMoneyInput(getField(row, IMPORT_ALIASES.costPrice)),
       imei: fieldText(row, IMPORT_ALIASES.imei),
@@ -5331,6 +5381,7 @@ async function importSalesFromExcel(file) {
       quantity,
       imei: imeiText,
       date,
+      time: '',
       createdAt: Date.now(),
     })['__draft_import_sale__'] || 0;
     DB.saveSale({
@@ -5338,6 +5389,7 @@ async function importSalesFromExcel(file) {
       itemId: item.id,
       customerId,
       date,
+      time: '',
       quantity,
       sellPrice: parseMoneyInput(getField(row, IMPORT_ALIASES.sellPrice)),
       costPriceAtSale: costBasis,
@@ -5476,7 +5528,7 @@ function registerServiceWorker() {
   // (đường dẫn không có query trước đây từng bị kẹt bản cũ nhiều phút sau khi
   // deploy bản mới). Bump số này mỗi khi sw.js thay đổi.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=47').catch((err) => console.warn('SW lỗi:', err));
+    navigator.serviceWorker.register('sw.js?v=48').catch((err) => console.warn('SW lỗi:', err));
   }
 }
 
