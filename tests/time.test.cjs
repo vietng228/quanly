@@ -71,7 +71,7 @@ test('Tạo và sửa mặt hàng/khách hàng giữ thời điểm tạo và gh
   }
 });
 
-test('Hóa đơn đơn/gộp có giờ bán và giờ xuất/in riêng; in lại không đổi phiếu', () => {
+test('Hóa đơn đơn/gộp chỉ có ngày giờ đã lưu; in lại không đổi nội dung và phiếu', () => {
   const { context, clock } = clockShop();
   vm.runInContext(`
     let printed = '';
@@ -83,11 +83,11 @@ test('Hóa đơn đơn/gộp có giờ bán và giờ xuất/in riêng; in lại
     const sale = DB.saveSale({itemId:'tv',date:'2026-10-26',time:'09:05',quantity:1,sellPrice:100});
     printInvoice(sale);
   `, context);
-  assert.ok(vm.runInContext("printed.includes('09:05') && printed.includes('Xuất/in hóa đơn: 26/10/2026 10:17')", context));
+  assert.ok(vm.runInContext("printed.includes('09:05') && printed.includes(formatDateVNFull(sale.date)) && !printed.includes('Xuất/in hóa đơn:') && !printed.includes('10:17') && !printed.includes('11:42')", context));
   clock.value = new Date(2026, 9, 26, 11, 42).getTime();
   vm.runInContext('printInvoice(sale);', context);
-  assert.ok(vm.runInContext("printed.includes('09:05') && printed.includes('Xuất/in hóa đơn: 26/10/2026 11:42')", context));
+  assert.ok(vm.runInContext("printed.includes('09:05') && printed.includes(formatDateVNFull(sale.date)) && !printed.includes('Xuất/in hóa đơn:') && !printed.includes('10:17') && !printed.includes('11:42')", context));
   assert.equal(vm.runInContext('DB.getSales()[0].time', context), '09:05');
   vm.runInContext('printOrderInvoice([sale, {...sale, id:"second"}]);', context);
-  assert.ok(vm.runInContext("printed.includes('09:05') && printed.includes('Xuất/in hóa đơn: 26/10/2026 11:42')", context));
+  assert.ok(vm.runInContext("printed.includes('09:05') && printed.includes(formatDateVNFull(sale.date)) && !printed.includes('Xuất/in hóa đơn:') && !printed.includes('10:17') && !printed.includes('11:42')", context));
 });

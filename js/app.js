@@ -3947,7 +3947,6 @@ function printInvoice(sale) {
     ${shop.address ? `<div>Địa chỉ: ${escapeHtml(shop.address)}</div>` : ''}
     ${shop.phone ? `<div>Điện thoại: ${escapeHtml(shop.phone)}</div>` : ''}
   </div>
-  <div class="help-text">Xuất/in hóa đơn: ${formatTimestampMinute(Date.now())}</div>
   <div class="invoice-title">HÓA ĐƠN BÁN HÀNG</div>
   <div class="center">Số HĐ: ${escapeHtml(invoiceNo)}</div>
   <div class="center">${formatDateVNFull(sale.date)} · ${recordTimeLabel(sale)}</div>
@@ -4094,7 +4093,6 @@ function printOrderInvoice(lines) {
     ${shop.address ? `<div>Địa chỉ: ${escapeHtml(shop.address)}</div>` : ''}
     ${shop.phone ? `<div>Điện thoại: ${escapeHtml(shop.phone)}</div>` : ''}
   </div>
-  <div class="help-text">Xuất/in hóa đơn: ${formatTimestampMinute(Date.now())}</div>
   <div class="invoice-title">HÓA ĐƠN BÁN HÀNG</div>
   <div class="center">Số HĐ: ${escapeHtml(invoiceNo)}</div>
   <div class="center">${formatDateVNFull(primary.date)} · ${recordTimeLabel(primary)}</div>
